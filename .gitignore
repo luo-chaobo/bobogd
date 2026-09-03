@@ -1,0 +1,27 @@
+# Runtime data and customer uploads
+data/
+private/
+backups/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+.pnpm-store/
+.cache/
+.remotion/
+coverage/
+dist/
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

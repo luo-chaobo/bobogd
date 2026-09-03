@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">未来机械 WL 单色标志</title>
+  <path fill="#777" d="M186 306h104l70 338 70-250 72 250 70-338h104L574 834h-92l-52-206-52 206h-94z"/>
+  <path fill="#000" d="M166 286h104l70 338 70-250 72 250 70-338h104L554 814h-92l-52-206-52 206h-94z"/>
+  <path fill="#777" d="M682 286h112v398h102v130H662V306z"/>
+  <path fill="#000" d="M662 266h112v398h102v130H642V286z"/>
+  <path fill="none" stroke="#fff" stroke-width="22" stroke-dasharray="10 13" d="M676 610v108h142"/>
+</svg>

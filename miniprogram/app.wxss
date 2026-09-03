@@ -1,0 +1,30 @@
+page { background: #f3f6f8; color: #1e2d3b; font-size: 28rpx; }
+.page { padding: 32rpx; }
+.hero { background: linear-gradient(135deg, #102335, #1b5160); color: #fff; border-radius: 24rpx; padding: 44rpx 36rpx; }
+.brand-hero { position: relative; height: 760rpx; overflow: hidden; border-radius: 28rpx; background: #102635; color: #fff; }
+.brand-hero-image, .brand-hero-shade { position: absolute; inset: 0; width: 100%; height: 100%; }
+.brand-hero-shade { background: linear-gradient(90deg, rgba(16,38,53,.96) 0%, rgba(16,38,53,.78) 52%, rgba(16,38,53,.18) 100%); }
+.brand-hero-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; height: 100%; padding: 44rpx 36rpx 52rpx; }
+.brand-hero-logo { width: 116rpx; height: 116rpx; margin-bottom: 28rpx; }
+.brand-hero .title { max-width: 580rpx; font-size: 54rpx; line-height: 1.18; }
+.brand-hero .subtitle { max-width: 560rpx; margin-top: 20rpx; color: #e3eaed; }
+.hero-button { margin-top: 34rpx; background: #FF672B; color: #102635; }
+.promise-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12rpx; margin: 24rpx 0; }
+.promise-grid > view { min-width: 0; padding: 24rpx 14rpx; border: 1rpx solid #dce3e6; border-radius: 18rpx; background: #fff; }
+.promise-value, .promise-label { display: block; }
+.promise-value { color: #102635; font-size: 24rpx; font-weight: 700; }
+.promise-label { margin-top: 6rpx; color: #607080; font-size: 20rpx; }
+.eyebrow { color: #59d3c8; font-size: 22rpx; letter-spacing: 3rpx; }
+.title { display: block; font-size: 46rpx; font-weight: 700; margin: 12rpx 0; }
+.subtitle { color: #d7e4ea; line-height: 1.7; }
+.card { background: #fff; border-radius: 20rpx; margin-top: 24rpx; padding: 28rpx; box-shadow: 0 6rpx 24rpx rgba(17, 41, 58, .08); }
+.section-title { display: block; font-size: 32rpx; font-weight: 700; margin-bottom: 20rpx; }
+.primary { background: #0b8b86; color: #fff; border-radius: 12rpx; margin-top: 24rpx; }
+.outline { border: 1rpx solid #0b8b86; color: #08746f; background: #fff; border-radius: 12rpx; margin-top: 20rpx; }
+.field { border-bottom: 1rpx solid #e4ebef; padding: 20rpx 0; }
+.label { color: #516170; font-size: 24rpx; display: block; margin-bottom: 10rpx; }
+.muted { color: #72818d; font-size: 24rpx; line-height: 1.7; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.tag { background: #e3f5f3; color: #08746f; border-radius: 999rpx; font-size: 22rpx; padding: 8rpx 16rpx; }
+.list-item { padding: 24rpx 0; border-bottom: 1rpx solid #eef2f4; }
+.danger { color: #c24e46; font-size: 24rpx; }

@@ -1,0 +1,14 @@
+{
+  "name": "future-machinery-promo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "render": "remotion render src/index.ts FactoryService ../../public/assets/video/factory-service.mp4 --codec=h264 --crf=18 --pixel-format=yuv420p --muted --public-dir=../../public"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.344",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.344"
+  }
+}

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" role="img" aria-labelledby="title">
+  <title id="title">未来机械 非标钣金制造 横版组合标</title>
+  <rect x="24" y="24" width="312" height="312" rx="56" fill="#102635"/>
+  <g transform="translate(24 24) scale(.3046875)">
+    <path fill="#788894" d="M186 306h104l70 338 70-250 72 250 70-338h104L574 834h-92l-52-206-52 206h-94z"/>
+    <path fill="#F2F5F6" d="M166 286h104l70 338 70-250 72 250 70-338h104L554 814h-92l-52-206-52 206h-94z"/>
+    <path fill="#788894" d="M682 286h112v398h102v130H662V306z"/>
+    <path fill="#F2F5F6" d="M662 266h112v398h102v130H642V286z"/>
+    <path fill="#102635" d="M700 318h36v384h122v54H690V318z"/>
+    <path fill="none" stroke="#FF672B" stroke-width="22" stroke-linecap="round" stroke-dasharray="10 13" d="M676 610v108h142"/>
+  </g>
+  <text x="396" y="164" fill="#102635" font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="92" font-weight="700">未来机械</text>
+  <text x="402" y="244" fill="#607080" font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="38" letter-spacing="8">非标钣金制造</text>
+  <rect x="398" y="276" width="192" height="12" fill="#FF672B"/>
+</svg>

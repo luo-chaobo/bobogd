@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">未来机械 WL 焊接结构件字标</title>
+  <rect width="1024" height="1024" rx="184" fill="#102635"/>
+  <path id="box-section" fill="#788894" d="M166 286h104l70 338 70-250 72 250 70-338h104L554 814h-92l-52-206-52 206h-94z" transform="translate(20 20)"/>
+  <path fill="#F2F5F6" d="M166 286h104l70 338 70-250 72 250 70-338h104L554 814h-92l-52-206-52 206h-94z"/>
+  <g id="tube-openings" stroke="#788894" stroke-width="14" stroke-linejoin="round">
+    <path fill="#102635" d="M184 300h70l8 34h-70z"/>
+    <path fill="#102635" d="M568 300h70l-8 34h-70z"/>
+  </g>
+  <path id="channel-l" fill="#788894" d="M682 286h112v398h102v130H662V306z"/>
+  <path fill="#F2F5F6" d="M662 266h112v398h102v130H642V286z"/>
+  <path fill="#102635" d="M700 318h36v384h122v54H690V318z"/>
+  <path id="weld-seam" fill="none" stroke="#FF672B" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="10 13" d="M676 610v108h142"/>
+</svg>
