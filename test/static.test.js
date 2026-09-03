@@ -55,6 +55,45 @@ test("provides consistent three-way conversion panels and responsive dropdown st
   assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.nav-menu/);
 });
 
+test("keeps desktop navigation aligned and preserves a hover path into dropdowns", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(styles, /\.site-header nav\s*\{[^}]*align-items:\s*stretch/);
+  assert.match(styles, /\.site-header nav > a,[\s\S]*?\.nav-trigger\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center/);
+  assert.match(styles, /\.nav-menu::before\s*\{[^}]*bottom:\s*100%[^}]*height:\s*12px/);
+  assert.match(styles, /\.nav-menu\s*\{[^}]*top:\s*100%/);
+});
+
+test("uses the WL logo in public footers", () => {
+  const publicDir = path.join(__dirname, "../public");
+  const pages = fs.readdirSync(publicDir, { recursive: true })
+    .filter((name) => name.endsWith(".html") && !["admin.html", "platform.html"].includes(name));
+  for (const page of pages) {
+    const html = fs.readFileSync(path.join(publicDir, page), "utf8");
+    assert.match(html, /class="footer-brand"[\s\S]*?src="\/assets\/brand\/wl-mark-transparent\.png"/,
+      `${page} must show the dark-footer WL logo`);
+  }
+});
+
+test("routes every website order call to the transaction platform", () => {
+  const publicDir = path.join(__dirname, "../public");
+  const pages = fs.readdirSync(publicDir, { recursive: true })
+    .filter((name) => name.endsWith(".html") && !["admin.html", "platform.html"].includes(name));
+  for (const page of pages) {
+    const html = fs.readFileSync(path.join(publicDir, page), "utf8");
+    for (const match of html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>(快速下单|提交加工需求|发起需求沟通|进入下单平台)<\/a>/g)) {
+      assert.equal(match[1], "/platform.html", `${page}: ${match[2]} must open the transaction platform`);
+    }
+  }
+});
+
+test("embeds the confirmed Gaode location on the contact page", () => {
+  const contact = fs.readFileSync(path.join(__dirname, "../public/contact.html"), "utf8");
+  assert.match(contact, /class="factory-map"/);
+  assert.match(contact, /<iframe[^>]*title="宁波未来机械高德地图位置"[^>]*src="https:\/\/www\.amap\.com\/search\?query=[^"]+"/);
+  assert.match(contact, /href="https:\/\/uri\.amap\.com\/search\?keyword=[^"]+"/);
+  assert.match(contact, /宁波市北仑区柴桥街道河南顾106号/);
+});
+
 function formFragment(html, id) {
   const match = html.match(new RegExp(`<form\\b[^>]*id="${id}"[\\s\\S]*?</form>`));
   assert.ok(match, `${id} form must exist`);
@@ -336,7 +375,7 @@ test("serves every public page with its own metadata and shared conversion actio
       assert.match(text, /<meta name="description" content="[^"]+">/);
       assert.match(text, new RegExp(`<link rel="canonical" href="https://wljixie\\.com${pathname === "/" ? "/" : pathname}">`));
       assert.match(text, /href="\/capabilities\.html"[^>]*>加工能力/);
-      assert.match(text, pathname === "/" ? /href="\/platform\.html"[^>]*>快速下单/ : /href="\/quote\.html"[^>]*>快速下单/);
+      assert.match(text, /href="\/platform\.html"[^>]*>快速下单/);
       assert.match(text, /href="\/tracking\.html"[^>]*>订单查询/);
       assert.match(text, /class="desktop-links"[^>]*>.*href="\/tracking\.html">订单查询.*href="\/news\.html">资讯中心.*href="\/contact\.html">联系我们/s);
       assert.match(text, /https:\/\/www\.jianweilingtuo\.com\//);
@@ -424,7 +463,7 @@ test("presents the corporate homepage journey with valid media, conversion actio
       "case-control-cabinet.jpg": [1600, 1200],
       "factory-floor.jpg": [1600, 1066]
     };
-    assert.equal([...home.matchAll(/<img\b/g)].length, Object.keys(assets).length + 1);
+    assert.equal([...home.matchAll(/<img\b/g)].length, Object.keys(assets).length + 2);
     for (const [filename, [width, height]] of Object.entries(assets)) {
       assert.match(home, new RegExp(`src="/assets/images/${filename}"[^>]*alt="[^"]+"[^>]*width="${width}" height="${height}"`));
     }
