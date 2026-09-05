@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOBOGD 工单作业图谱</title>
+    <style>
+      :root {
+        --ink: #102235;
+        --muted: #5d6d7c;
+        --line: #d7e1e8;
+        --surface: #ffffff;
+        --canvas: #f2f6f7;
+        --brand: #0c5d55;
+        --brand-deep: #073f3a;
+        --brand-soft: #e2f2ef;
+        --blue: #1769aa;
+        --blue-soft: #e9f2fb;
+        --yellow: #a86a00;
+        --yellow-soft: #fff2d8;
+        --red: #b42d24;
+        --red-soft: #ffe9e7;
+        --purple: #7041a8;
+        --purple-soft: #f0e9fb;
+        --green: #16784a;
+        --green-soft: #e5f5eb;
+        --radius: 8px;
+        --shadow: 0 8px 24px rgba(16, 34, 53, 0.08);
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        line-height: 1.6;
+      }
+
+      .topbar {
+        border-bottom: 1px solid rgba(255,255,255,.16);
+        background: var(--brand-deep);
+        color: #fff;
+      }
+      .topbar-inner, .layout { max-width: 1440px; margin: 0 auto; }
+      .topbar-inner { padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+      .brand { display: flex; align-items: center; gap: 12px; font-size: 15px; font-weight: 700; letter-spacing: .04em; }
+      .brand-mark { width: 30px; height: 30px; border: 2px solid #6bd1bf; display: grid; place-items: center; border-radius: 50%; color: #6bd1bf; }
+      .tagline { color: #c4d8d5; font-size: 13px; }
+
+      .hero { background: linear-gradient(135deg, var(--brand-deep), var(--brand)); color: #fff; }
+      .hero-inner { max-width: 1440px; margin: 0 auto; padding: 56px 32px 62px; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(300px, .7fr); gap: 44px; align-items: end; }
+      .eyebrow { display: inline-flex; gap: 8px; align-items: center; padding: 5px 10px; border: 1px solid rgba(255,255,255,.25); border-radius: 999px; color: #bfeae1; font-size: 12px; }
+      h1 { margin: 16px 0 12px; font-size: clamp(32px, 5vw, 58px); line-height: 1.12; letter-spacing: 0; }
+      .hero p { max-width: 700px; margin: 0; color: #d3e5e2; font-size: 17px; }
+      .hero-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .hero-fact { min-height: 118px; padding: 18px; border: 1px solid rgba(255,255,255,.16); border-radius: var(--radius); background: rgba(0, 0, 0, .12); }
+      .hero-fact strong { display: block; color: #78d8c7; font-size: 28px; line-height: 1; }
+      .hero-fact span { display: block; margin-top: 8px; color: #d6e6e4; font-size: 13px; }
+
+      .layout { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 28px; padding: 30px 32px 64px; }
+      .toc { position: sticky; top: 18px; align-self: start; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+      .toc-title { padding: 8px 10px 12px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+      .toc a { display: block; padding: 8px 10px; border-radius: 5px; color: #30475a; font-size: 14px; text-decoration: none; }
+      .toc a:hover, .toc a:focus { background: var(--brand-soft); color: var(--brand-deep); outline: none; }
+      main { min-width: 0; }
+      section { margin-bottom: 28px; padding: 30px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); scroll-margin-top: 16px; }
+      .section-kicker { margin: 0 0 5px; color: var(--brand); font-size: 12px; font-weight: 800; letter-spacing: .1em; }
+      h2 { margin: 0 0 8px; font-size: 26px; line-height: 1.25; }
+      h3 { margin: 0; font-size: 17px; }
+      .lead { max-width: 900px; margin: 0 0 24px; color: var(--muted); }
+      .grid { display: grid; gap: 16px; }
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+      .card p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+      .card-icon { width: 34px; height: 34px; display: grid; place-items: center; margin-bottom: 12px; border-radius: 7px; background: var(--brand-soft); color: var(--brand); }
+      .card-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; }
+
+      .flow { display: grid; grid-template-columns: repeat(7, minmax(118px, 1fr)); align-items: stretch; gap: 0; overflow-x: auto; padding-bottom: 8px; }
+      .flow-step { position: relative; min-width: 118px; padding: 16px 13px; border: 1px solid var(--line); background: #fff; }
+      .flow-step:first-child { border-radius: 7px 0 0 7px; }
+      .flow-step:last-child { border-radius: 0 7px 7px 0; }
+      .flow-step:not(:last-child)::after { position: absolute; z-index: 1; top: 50%; right: -11px; width: 20px; height: 20px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); background: #fff; content: ""; transform: translateY(-50%) rotate(45deg); }
+      .step-no { color: var(--brand); font-size: 12px; font-weight: 800; }
+      .flow-step strong { display: block; margin-top: 6px; font-size: 15px; }
+      .flow-step span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+      .flow-step.highlight { background: var(--brand-soft); }
+      .flow-step.alert { background: var(--red-soft); }
+
+      .state-map { display: grid; grid-template-columns: 1fr 44px 1fr 44px 1fr 44px 1fr; align-items: center; gap: 8px; margin-top: 18px; }
+      .state { padding: 13px; border-radius: 7px; text-align: center; font-weight: 800; font-size: 14px; }
+      .state.wait { color: #4a5c6d; background: #edf1f4; }
+      .state.progress { color: #795000; background: var(--yellow-soft); }
+      .state.pause { color: #535d69; background: #e5e9ef; }
+      .state.done { color: #16653e; background: var(--green-soft); }
+      .arrow { color: var(--brand); text-align: center; font-size: 24px; }
+      .state-note { grid-column: 1 / -1; margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+      .rule-list { display: grid; gap: 10px; margin: 18px 0 0; padding: 0; list-style: none; }
+      .rule-list li { display: grid; grid-template-columns: 23px minmax(0, 1fr); gap: 8px; color: #344b5d; font-size: 14px; }
+      .check { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; background: var(--brand-soft); color: var(--brand); font-weight: 800; font-size: 13px; }
+
+      .quality-flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+      .quality-node { position: relative; min-height: 150px; padding: 18px; border-radius: var(--radius); background: #f7fafb; border: 1px solid var(--line); }
+      .quality-node strong { display: block; margin-bottom: 8px; }
+      .quality-node p { margin: 0; color: var(--muted); font-size: 13px; }
+      .quality-node::before { display: block; width: 26px; height: 26px; margin-bottom: 12px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); content: attr(data-no); font-size: 13px; font-weight: 800; line-height: 26px; text-align: center; }
+      .quality-node.warn { border-color: #efc0bc; background: var(--red-soft); }
+
+      .legend { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 22px; }
+      .legend-item { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: #405466; font-size: 13px; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; }
+      .dot.green { background: var(--green); } .dot.yellow { background: #d99a15; } .dot.red { background: var(--red); } .dot.purple { background: var(--purple); } .dot.gray { background: #8393a0; }
+      .dashboard-rule { display: grid; grid-template-columns: 52px 1fr; gap: 14px; padding: 16px 0; border-top: 1px solid var(--line); }
+      .dashboard-rule:first-of-type { border-top: 0; }
+      .rule-num { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 7px; background: var(--blue-soft); color: var(--blue); font-weight: 800; }
+      .dashboard-rule p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+      .role-card { position: relative; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+      .role-card::before { position: absolute; top: 0; left: 20px; width: 46px; height: 3px; background: var(--brand); content: ""; }
+      .role-card h3 { margin-top: 8px; }
+      .role-meta { margin: 6px 0 14px; color: var(--brand); font-size: 12px; font-weight: 800; }
+      .role-card ul { margin: 0; padding-left: 18px; color: #405466; font-size: 14px; }
+      .role-card li + li { margin-top: 6px; }
+      .role-focus { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 13px; }
+      .role-focus strong { color: var(--ink); }
+
+      .trace { display: grid; grid-template-columns: repeat(7, minmax(94px, 1fr)); gap: 8px; overflow-x: auto; padding-bottom: 8px; }
+      .trace-item { min-width: 94px; padding: 13px; border-radius: 7px; background: #f6f9fa; border: 1px solid var(--line); }
+      .trace-item strong { display: block; color: var(--brand); font-size: 14px; }
+      .trace-item span { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+      .footer { max-width: 1440px; margin: 0 auto; padding: 0 32px 40px; color: var(--muted); font-size: 12px; }
+
+      @media (max-width: 1040px) {
+        .hero-inner { grid-template-columns: 1fr; }
+        .layout { grid-template-columns: 1fr; }
+        .toc { position: static; display: flex; gap: 6px; overflow-x: auto; padding: 8px; white-space: nowrap; }
+        .toc-title { display: none; }
+        .toc a { flex: 0 0 auto; }
+        .quality-flow { grid-template-columns: repeat(2, 1fr); }
+      }
+      @media (max-width: 720px) {
+        .topbar-inner, .hero-inner, .layout, .footer { padding-left: 18px; padding-right: 18px; }
+        .tagline { display: none; }
+        .hero-inner { padding-top: 40px; padding-bottom: 42px; }
+        .hero-facts { grid-template-columns: 1fr 1fr 1fr; }
+        .hero-fact { min-height: 94px; padding: 13px; }
+        .hero-fact strong { font-size: 22px; }
+        .hero-fact span { font-size: 12px; }
+        section { padding: 22px 16px; }
+        h2 { font-size: 23px; }
+        .grid-3, .grid-2 { grid-template-columns: 1fr; }
+        .state-map { grid-template-columns: 1fr; gap: 7px; }
+        .arrow { transform: rotate(90deg); }
+        .quality-flow { grid-template-columns: 1fr; }
+      }
+      @media print {
+        body { background: #fff; }
+        .toc { display: none; }
+        .layout { display: block; padding: 20px; }
+        section { break-inside: avoid; box-shadow: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand"><span class="brand-mark">B</span> BOBOGD 工单系统</div>
+        <div class="tagline">钣金订单、工艺路线、报工与看板的一体化作业说明</div>
+      </div>
+    </header>
+
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-inner">
+        <div>
+          <span class="eyebrow">内部培训与岗位交接</span>
+          <h1 id="page-title">工单业务逻辑<br />与岗位操作图谱</h1>
+          <p>把订单、工单、派工、扫码报工、质检返工、异常闭环和生产看板串成一条可执行、可追溯的生产主线。</p>
+        </div>
+        <div class="hero-facts" aria-label="系统组成">
+          <div class="hero-fact"><strong>3</strong><span>后台 Web、小程序、电视看板</span></div>
+          <div class="hero-fact"><strong>7</strong><span>核心数据对象持续关联</span></div>
+          <div class="hero-fact"><strong>1</strong><span>订单至归档的统一主流程</span></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layout">
+      <nav class="toc" aria-label="页面目录">
+        <div class="toc-title">快速定位</div>
+        <a href="#overview">系统总览</a>
+        <a href="#flow">生产主流程</a>
+        <a href="#control">工序控制</a>
+        <a href="#quality">质检与返工</a>
+        <a href="#dashboard">看板规则</a>
+        <a href="#roles">岗位操作地图</a>
+        <a href="#trace">数据追溯</a>
+      </nav>
+
+      <main>
+        <section id="overview">
+          <p class="section-kicker">01 / 系统总览</p>
+          <h2>三类界面，共用一条生产数据链</h2>
+          <p class="lead">后台负责建单、派工和管理；小程序负责现场执行与报工；电视大屏负责公开展示进度、负荷和风险。所有动作最终沉淀到同一张工单及其工艺路线中。</p>
+          <div class="grid grid-3">
+            <article class="card">
+              <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg></div>
+              <h3>后台 Web</h3>
+              <p>客户资料、订单工单、工艺路线、派工、异常返工、历史查询、报表与基础设置。</p>
+            </article>
+            <article class="card">
+              <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M10 18h4"/></svg></div>
+              <h3>微信小程序</h3>
+              <p>我的任务、扫码开始、报工、质检、异常处理、图纸预览与手机生产看板。</p>
+            </article>
+            <article class="card">
+              <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg></div>
+              <h3>电视生产看板</h3>
+              <p>生产概况、延期与加急风险、工序负荷、报工趋势和活跃加工工单。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="flow">
+          <p class="section-kicker">02 / 生产主流程</p>
+          <h2>从订单录入到归档</h2>
+          <p class="lead">订单保存后同步生成工单与工艺路线。工序完成、异常或返工会自动回写工单状态与看板，不需要重复登记。</p>
+          <div class="flow" aria-label="订单到归档流程">
+            <div class="flow-step"><span class="step-no">01</span><strong>订单录入</strong><span>客户、产品、数量、交期、优先级、图纸与工序。</span></div>
+            <div class="flow-step highlight"><span class="step-no">02</span><strong>自动建工单</strong><span>生成工单号，并按所选工序建立路线。</span></div>
+            <div class="flow-step"><span class="step-no">03</span><strong>派工排期</strong><span>指定人员或按岗位开放，设置计划开始日与结束日。</span></div>
+            <div class="flow-step"><span class="step-no">04</span><strong>开始加工</strong><span>员工在任务页点击开始，或扫码确认开始。</span></div>
+            <div class="flow-step highlight"><span class="step-no">05</span><strong>扫码报工</strong><span>提交完成、返工、备注、现场图片及异常信息。</span></div>
+            <div class="flow-step alert"><span class="step-no">06</span><strong>质检/异常</strong><span>合格完成；不合格进入报废、让步接收或返工闭环。</span></div>
+            <div class="flow-step"><span class="step-no">07</span><strong>完成归档</strong><span>全部工序完成，工单从活跃看板转入历史查询。</span></div>
+          </div>
+        </section>
+
+        <section id="control">
+          <p class="section-kicker">03 / 工序控制</p>
+          <h2>派工决定权限，报工驱动状态</h2>
+          <div class="grid grid-2">
+            <div class="card">
+              <h3>工序状态流转</h3>
+              <div class="state-map" aria-label="工序状态流转">
+                <div class="state wait">待开始</div><div class="arrow">→</div>
+                <div class="state progress">进行中</div><div class="arrow">→</div>
+                <div class="state pause">暂停</div><div class="arrow">→</div>
+                <div class="state done">已完成</div>
+                <p class="state-note">进行中可暂停，暂停后可继续；完成数量达到计划数量自动完成。任一异常会使对应工序进入异常，解决后按完成数量恢复进行中或已完成。</p>
+              </div>
+            </div>
+            <div class="card">
+              <h3>权限与校验</h3>
+              <ul class="rule-list">
+                <li><span class="check">1</span><span>工序已指定员工时，仅该员工及管理角色可操作。</span></li>
+                <li><span class="check">2</span><span>未指定员工时，按工序所属岗位开放；普通员工不能跨岗位报工。</span></li>
+                <li><span class="check">3</span><span>待开始必须先开始；暂停状态不可报工；已完成不可再次报工。</span></li>
+                <li><span class="check">4</span><span>本次完成数量大于 0，累计数量不得超过计划数量；返工数量不得超过本次完成数量。</span></li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="quality">
+          <p class="section-kicker">04 / 质检与返工</p>
+          <h2>质检是正式工序，异常必须闭环</h2>
+          <p class="lead">质检前一道生产工序完成且有可送检数量时，质检才可报工。不合格不能只留备注，必须形成对应的异常和处置记录。</p>
+          <div class="quality-flow">
+            <article class="quality-node" data-no="1"><strong>送检</strong><p>送检数量与检验数量均大于 0，且两者必须相等。</p></article>
+            <article class="quality-node" data-no="2"><strong>判定</strong><p>合格数量与不合格数量之和必须等于检验数量。</p></article>
+            <article class="quality-node warn" data-no="3"><strong>不合格处置</strong><p>选择让步接收、报废或返工；填写问题工序和问题说明。</p></article>
+            <article class="quality-node" data-no="4"><strong>闭环复检</strong><p>返工时在质检前插入返工工序，返工完成后进入复检和异常解决。</p></article>
+          </div>
+          <div class="grid grid-2" style="margin-top:16px">
+            <article class="card"><h3>正常完成</h3><p>全部合格的数量计入质检完成；达到计划数量后，质检工序自动完成。</p></article>
+            <article class="card"><h3>异常联动</h3><p>生产报工填写异常、质检发现不合格或管理手工登记，都会创建异常记录；主管、质检、老板、管理员可填写处理说明并解决。</p></article>
+          </div>
+        </section>
+
+        <section id="dashboard">
+          <p class="section-kicker">05 / 看板规则</p>
+          <h2>让车间先看到最需要处理的工单</h2>
+          <p class="lead">电视大屏、小程序横屏看板使用同一套业务语义；手机竖屏看板保留工单卡片和分段工序进度，便于快速查看。</p>
+          <div class="legend" aria-label="状态颜色图例">
+            <span class="legend-item"><i class="dot green"></i>已完成 / 计划内</span>
+            <span class="legend-item"><i class="dot yellow"></i>进行中</span>
+            <span class="legend-item"><i class="dot red"></i>延期 / 48 小时加急</span>
+            <span class="legend-item"><i class="dot purple"></i>未解决质检异常</span>
+            <span class="legend-item"><i class="dot gray"></i>待开始</span>
+          </div>
+          <div class="dashboard-rule"><div class="rule-num">01</div><div><h3>活跃工单范围</h3><p>只展示未完成工单；所有工序完成后自动退出活跃列表，转入历史查询。</p></div></div>
+          <div class="dashboard-rule"><div class="rule-num">02</div><div><h3>工单排序</h3><p>延期单优先，其次为 48 小时内加急单，再按交期由近到远排列；普通单遵循交期顺序。</p></div></div>
+          <div class="dashboard-rule"><div class="rule-num">03</div><div><h3>工序节点</h3><p>横向椭圆节点显示计划时间区间；节点下方显示工序名；最近报工显示报工日与报工人。晚于计划结束日时，报工日期标红。</p></div></div>
+          <div class="dashboard-rule"><div class="rule-num">04</div><div><h3>异常与轮播</h3><p>未解决的质检异常使质检节点紫色泛光、问题工序文字紫色高亮；一页显示不下时按后台设置自动翻页轮播。</p></div></div>
+        </section>
+
+        <section id="roles">
+          <p class="section-kicker">06 / 岗位操作地图</p>
+          <h2>每个岗位只做职责范围内的事</h2>
+          <p class="lead">系统将管理、排产、现场生产、质检和基础维护分开。工人看到的是自己的未完成任务，管理角色负责跨工序协调与异常闭环。</p>
+          <div class="grid grid-3">
+            <article class="role-card"><h3>老板</h3><p class="role-meta">全局监控与决策</p><ul><li>查看生产中工单、延期风险和异常数量。</li><li>查看手机横屏大屏、电视看板和异常列表。</li><li>必要时参与异常处理结果确认。</li></ul><p class="role-focus"><strong>重点：</strong>哪些订单在做、快延期、存在异常。</p></article>
+            <article class="role-card"><h3>生产主管</h3><p class="role-meta">建单、排产与异常协调</p><ul><li>维护客户，创建订单并选择实际工艺路线。</li><li>给每道工序派人、设置计划时间、增删未报工工序。</li><li>处理异常，查看生产总览和基础报表。</li></ul><p class="role-focus"><strong>重点：</strong>工单准确、派工清楚、异常及时闭环。</p></article>
+            <article class="role-card"><h3>办公室/跟单</h3><p class="role-meta">订单信息与交期沟通</p><ul><li>维护客户资料，录入订单、产品、图号、数量与交期。</li><li>查询当前工序和生产状态。</li><li>导出报工 CSV 或完整数据用于统计。</li></ul><p class="role-focus"><strong>重点：</strong>订单准确、交期清楚、对外答复有依据。</p></article>
+            <article class="role-card"><h3>车间工人</h3><p class="role-meta">执行指定工序与及时报工</p><ul><li>从“我的任务”找到被派给自己的工序。</li><li>开始、暂停、继续后提交完成件数与返工数量。</li><li>有异常时填写类型、说明和现场图片。</li></ul><p class="role-focus"><strong>重点：</strong>数量真实，完成及时报工，问题及时上报。</p></article>
+            <article class="role-card"><h3>质检</h3><p class="role-meta">检验、处置与质量异常</p><ul><li>在可送检数量满足条件时进行质检报工。</li><li>录入合格、不合格与处置方式。</li><li>选择问题工序、返工工序，提交质量异常。</li></ul><p class="role-focus"><strong>重点：</strong>质量问题必须落到具体工单和工序。</p></article>
+            <article class="role-card"><h3>管理员</h3><p class="role-meta">账号、角色与基础资料</p><ul><li>维护员工、岗位角色、标准工序和看板设置。</li><li>停用不再使用的工序，保证新订单不能误选。</li><li>检查账号与权限是否匹配实际岗位。</li></ul><p class="role-focus"><strong>重点：</strong>账号、权限和基础资料正确可用。</p></article>
+          </div>
+        </section>
+
+        <section id="trace">
+          <p class="section-kicker">07 / 数据追溯</p>
+          <h2>每一次生产动作都能回到原始工单</h2>
+          <p class="lead">订单信息、路线、人员、数量、异常和关键管理操作通过关联记录保存，便于查询历史、核对责任和分析问题。</p>
+          <div class="trace" aria-label="数据关联关系">
+            <div class="trace-item"><strong>客户</strong><span>联系人、电话、地址、备注</span></div>
+            <div class="trace-item"><strong>订单</strong><span>产品、数量、交期、优先级、图纸</span></div>
+            <div class="trace-item"><strong>工单</strong><span>生产执行主线与当前工序</span></div>
+            <div class="trace-item"><strong>工艺路线</strong><span>工序、派工、排期、完成数量</span></div>
+            <div class="trace-item"><strong>报工记录</strong><span>人员、数量、时间、计划判定、图片</span></div>
+            <div class="trace-item"><strong>异常记录</strong><span>类型、问题工序、处理人和结果</span></div>
+            <div class="trace-item"><strong>审计日志</strong><span>关键管理动作与历史人员快照</span></div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <footer class="footer">BOBOGD 工单作业图谱 · 内容基于当前系统业务逻辑整理 · 适用于内部培训、岗位交接与日常查阅</footer>
+  </body>
+</html>

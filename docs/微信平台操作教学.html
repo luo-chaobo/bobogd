@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>微信小程序平台操作教学 - 波波工单</title>
+    <style>
+      :root {
+        --ink: #0b1830;
+        --muted: #5c6b82;
+        --line: #d8e1ec;
+        --panel: #ffffff;
+        --bg: #f5f7fb;
+        --brand: #0f766e;
+        --brand-dark: #0b5f58;
+        --warn: #b45309;
+        --danger: #b42318;
+        --ok: #15803d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--bg);
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        line-height: 1.7;
+      }
+
+      main {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 32px 18px 56px;
+      }
+
+      header {
+        margin-bottom: 22px;
+        padding: 26px;
+        background: linear-gradient(135deg, #102033, #0f766e);
+        color: #fff;
+        border-radius: 8px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        line-height: 1.25;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 30px;
+      }
+
+      h2 {
+        margin: 28px 0 12px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid var(--line);
+        font-size: 22px;
+      }
+
+      h3 {
+        margin: 20px 0 8px;
+        font-size: 18px;
+      }
+
+      p {
+        margin: 8px 0;
+      }
+
+      a {
+        color: var(--brand);
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 5px;
+        background: #eef4f7;
+        color: #0b4f49;
+        font-family: Consolas, "Courier New", monospace;
+      }
+
+      .subtitle {
+        margin: 0;
+        color: #dbeafe;
+        font-size: 16px;
+      }
+
+      .card {
+        margin: 14px 0;
+        padding: 20px 22px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 34px 1fr;
+        gap: 12px;
+        margin: 12px 0;
+      }
+
+      .num {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: var(--brand);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .tag {
+        display: inline-block;
+        margin: 2px 4px 2px 0;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #ecfdf5;
+        color: var(--brand-dark);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .warn {
+        border-left: 5px solid var(--warn);
+        background: #fff7ed;
+      }
+
+      .danger {
+        border-left: 5px solid var(--danger);
+        background: #fff1f2;
+      }
+
+      .ok {
+        border-left: 5px solid var(--ok);
+        background: #f0fdf4;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+        background: #fff;
+      }
+
+      th,
+      td {
+        padding: 12px 10px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eef3f8;
+        color: #334155;
+      }
+
+      .checklist li,
+      .plain-list li {
+        margin: 6px 0;
+      }
+
+      @media (max-width: 760px) {
+        main {
+          padding: 18px 12px 42px;
+        }
+
+        header {
+          padding: 20px;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+          white-space: nowrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>微信小程序平台操作教学</h1>
+        <p class="subtitle">用于把“波波工单 / 非标钣金工单系统”配置到微信小程序后台，并完成体验版、审核、发布。</p>
+      </header>
+
+      <section class="card ok">
+        <h2>当前结论</h2>
+        <p>你的服务器和网站已经跑起来后，微信平台主要还要完成这几件事：</p>
+        <p>
+          <span class="tag">配置服务器域名</span>
+          <span class="tag">添加开发者/体验成员</span>
+          <span class="tag">开发者工具上传代码</span>
+          <span class="tag">设置体验版</span>
+          <span class="tag">提交审核</span>
+          <span class="tag">审核通过后发布</span>
+        </p>
+        <p class="muted">注意：微信小程序正式版必须使用 HTTPS 合法域名。你现在应使用 <code>https://bobogd.wljixie.com</code> 作为小程序接口域名。</p>
+      </section>
+
+      <section class="card">
+        <h2>一、准备内容</h2>
+        <div class="grid">
+          <div>
+            <h3>你需要准备</h3>
+            <ul class="plain-list">
+              <li>微信小程序账号管理员扫码登录权限。</li>
+              <li>小程序 AppID。</li>
+              <li>已经能正常打开的接口域名：<code>https://bobogd.wljixie.com</code>。</li>
+              <li>微信开发者工具。</li>
+              <li>本机项目目录：<code>D:\codex内容\copy黑湖小工单\miniprogram</code>。</li>
+            </ul>
+          </div>
+          <div>
+            <h3>发布前建议确认</h3>
+            <ul class="plain-list">
+              <li><code>https://bobogd.wljixie.com</code> 可以打开登录页。</li>
+              <li><code>https://screen.wljixie.com/tv.html</code> 可以打开大屏看板。</li>
+              <li>宝塔中 PM2 项目 <code>bobogd</code> 是 online。</li>
+              <li>宝塔 SSL 已部署，并且浏览器不再提示证书错误。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>二、配置服务器域名</h2>
+        <div class="step">
+          <div class="num">1</div>
+          <div>
+            <h3>进入微信公众平台</h3>
+            <p>打开 <a href="https://mp.weixin.qq.com/" target="_blank">mp.weixin.qq.com</a>，用小程序管理员微信扫码登录。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>找到服务器域名</h3>
+            <p>左侧菜单进入：<strong>管理 → 开发管理 → 开发设置 → 服务器域名</strong>，点击右侧的<strong>修改</strong>。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div>
+            <h3>填写合法域名</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>配置项</th>
+                  <th>填写内容</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>request 合法域名</td>
+                  <td><code>https://bobogd.wljixie.com</code></td>
+                  <td>小程序登录、查询任务、提交报工都走这里。</td>
+                </tr>
+                <tr>
+                  <td>uploadFile 合法域名</td>
+                  <td><code>https://bobogd.wljixie.com</code></td>
+                  <td>后续上传现场照片、异常图片使用。</td>
+                </tr>
+                <tr>
+                  <td>downloadFile 合法域名</td>
+                  <td><code>https://bobogd.wljixie.com</code></td>
+                  <td>后续下载图片、附件、二维码时使用。</td>
+                </tr>
+                <tr>
+                  <td>socket 合法域名</td>
+                  <td>暂不填写</td>
+                  <td>当前版本没有使用 WebSocket。</td>
+                </tr>
+                <tr>
+                  <td>udp / tcp 合法域名</td>
+                  <td>暂不填写</td>
+                  <td>当前版本不需要。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div>
+            <h3>保存配置</h3>
+            <p>点击保存。保存后建议关闭并重新打开微信开发者工具，避免开发者工具仍使用旧域名缓存。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card warn">
+        <h2>三、业务域名要不要填？</h2>
+        <p>第一版小程序主要通过接口访问后台，不需要在小程序里嵌入网页，所以<strong>业务域名可以先不配置</strong>。</p>
+        <p>只有当你以后想在小程序里直接打开网页，例如用 <code>web-view</code> 嵌入 <code>https://screen.wljixie.com/tv.html</code> 或网页后台时，才需要配置业务域名。</p>
+        <p>如果将来要配置业务域名，微信会要求你把一个校验文件上传到网站根目录。到时候按微信页面提示下载校验文件，再放进服务器对应网站目录即可。</p>
+      </section>
+
+      <section class="card">
+        <h2>四、添加开发者和体验成员</h2>
+        <div class="step">
+          <div class="num">1</div>
+          <div>
+            <h3>开发者</h3>
+            <p>进入：<strong>管理 → 成员管理 → 项目成员</strong>。把需要上传代码的人添加为开发者。如果只有你自己上传，可以先不加其他人。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>体验成员</h3>
+            <p>进入：<strong>管理 → 成员管理 → 体验成员</strong>。添加老板、主管、工人测试手机对应的微信号。</p>
+            <p class="muted">体验版只有体验成员能打开。正式发布以后，普通微信用户才能正常搜索或扫码进入。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>五、微信开发者工具上传代码</h2>
+        <div class="step">
+          <div class="num">1</div>
+          <div>
+            <h3>打开项目</h3>
+            <p>打开微信开发者工具，选择<strong>导入项目</strong>，项目目录选择：</p>
+            <p><code>D:\codex内容\copy黑湖小工单\miniprogram</code></p>
+            <p>AppID 填你微信公众平台里的小程序 AppID。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>确认接口地址</h3>
+            <p>当前小程序配置应指向：</p>
+            <p><code>https://bobogd.wljixie.com</code></p>
+            <p class="muted">如果以后换域名，需要同步修改小程序代码里的接口地址，再重新上传版本。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div>
+            <h3>编译和预览</h3>
+            <p>点击<strong>编译</strong>，确认页面能打开。再点击<strong>预览</strong>，用手机微信扫码测试。</p>
+            <p>建议先测试这些账号：</p>
+            <ul class="plain-list">
+              <li>老板：<code>13800000001 / 123456</code></li>
+              <li>生产主管：<code>13800000002 / 123456</code></li>
+              <li>工人：<code>13800000004 / 123456</code></li>
+              <li>质检：<code>13800000006 / 123456</code></li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div>
+            <h3>上传版本</h3>
+            <p>测试无明显问题后，点击右上角<strong>上传</strong>。</p>
+            <p>版本号建议填：<code>1.0.0</code>。项目备注可填：<code>第一版：工单、扫码报工、生产看板</code>。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>六、设置体验版和提交审核</h2>
+        <div class="step">
+          <div class="num">1</div>
+          <div>
+            <h3>设置体验版</h3>
+            <p>回到微信公众平台，进入：<strong>管理 → 版本管理</strong>。在开发版本里找到刚上传的版本，点击<strong>选为体验版</strong>。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>体验版测试</h3>
+            <p>让体验成员扫码打开体验版，完整跑一遍：</p>
+            <ul class="checklist">
+              <li>登录是否正常。</li>
+              <li>工人是否能看到自己的任务。</li>
+              <li>扫码进入对应工序是否正常。</li>
+              <li>提交报工后，后台和大屏看板是否同步变化。</li>
+              <li>异常上报是否正常。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div>
+            <h3>提交审核</h3>
+            <p>体验版确认没问题后，在版本管理中点击<strong>提交审核</strong>。</p>
+            <p>类目建议选择和企业生产管理、效率工具、企业服务相关的类目。按平台实际可选类目为准。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div>
+            <h3>审核通过后发布</h3>
+            <p>微信审核通过后，版本管理页面会出现<strong>发布</strong>按钮。点击发布后，正式用户才可以使用正式版。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card warn">
+        <h2>七、小程序备案提醒</h2>
+        <p>如果微信平台提示需要做<strong>小程序备案</strong>，需要先完成备案后才能正式发布或持续提供服务。</p>
+        <p>你现在域名页面曾显示过“未备案”，这通常是<strong>网站域名 ICP 备案</strong>状态。微信小程序本身也可能有单独备案流程。两者不是同一个页面，但上线长期使用都建议补齐。</p>
+        <p>备案入口通常在微信公众平台左侧或顶部提示中，也可能在<strong>设置 / 基本设置 / 小程序备案</strong>相关页面里。按页面要求填写主体信息、负责人信息、服务内容并提交审核。</p>
+      </section>
+
+      <section class="card">
+        <h2>八、正式上线前检查清单</h2>
+        <ul class="checklist">
+          <li>浏览器打开 <code>https://bobogd.wljixie.com</code> 正常。</li>
+          <li>浏览器打开 <code>https://screen.wljixie.com/tv.html</code> 正常。</li>
+          <li>微信平台服务器域名已保存：request、uploadFile、downloadFile 都是 <code>https://bobogd.wljixie.com</code>。</li>
+          <li>微信开发者工具能编译、预览、上传。</li>
+          <li>体验成员手机能打开体验版。</li>
+          <li>扫码报工、提交报工、异常上报、后台看板、大屏看板都测试通过。</li>
+          <li>宝塔 PM2 里的 <code>bobogd</code> 项目在线。</li>
+          <li>服务器重启后，PM2 能自动恢复项目。</li>
+        </ul>
+      </section>
+
+      <section class="card danger">
+        <h2>九、常见错误处理</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>问题</th>
+              <th>原因</th>
+              <th>处理办法</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>request:fail url not in domain list</td>
+              <td>微信平台服务器域名没填，或开发者工具缓存旧配置。</td>
+              <td>确认 request 合法域名已保存为 <code>https://bobogd.wljixie.com</code>，然后重启微信开发者工具。</td>
+            </tr>
+            <tr>
+              <td>上传图片失败</td>
+              <td>uploadFile 合法域名未配置。</td>
+              <td>在服务器域名中添加 uploadFile 合法域名。</td>
+            </tr>
+            <tr>
+              <td>浏览器能打开，小程序打不开</td>
+              <td>通常是 HTTPS、合法域名、证书链或小程序备案问题。</td>
+              <td>先确认 HTTPS 证书有效，再检查微信平台服务器域名是否保存。</td>
+            </tr>
+            <tr>
+              <td>开发者工具本地能跑，手机体验版不能跑</td>
+              <td>开发者工具可能勾选了“不校验合法域名”。</td>
+              <td>正式测试时取消该勾选，按真实微信环境测试。</td>
+            </tr>
+            <tr>
+              <td>扫码报工二维码打不开</td>
+              <td>二维码地址、接口域名或服务器服务异常。</td>
+              <td>确认后台能打开，PM2 在线，并重新打印最新二维码。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card ok">
+        <h2>十、以后更新小程序怎么做</h2>
+        <ol>
+          <li>先在本地修改和测试代码。</li>
+          <li>如果改了小程序端，打开微信开发者工具重新上传版本，例如 <code>1.0.1</code>。</li>
+          <li>在微信公众平台把新版本设置为体验版，先让内部人员测试。</li>
+          <li>测试通过后提交审核。</li>
+          <li>审核通过后点击发布。</li>
+        </ol>
+        <p class="muted">服务器端代码如果更新，需要同步上传到宝塔服务器，并重启 PM2 项目。小程序端代码如果更新，需要通过微信开发者工具重新上传并走审核发布流程。</p>
+      </section>
+    </main>
+  </body>
+</html>

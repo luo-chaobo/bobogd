@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">波波工单平板版</string>
+    <string name="backend_url">https://screen.wljixie.com/?tabletApp=1</string>
+    <string name="allowed_host">screen.wljixie.com</string>
+</resources>

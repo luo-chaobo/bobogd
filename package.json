@@ -1,0 +1,16 @@
+{
+  "name": "sheet-metal-work-order-cloud-v2",
+  "version": "0.2.0",
+  "private": true,
+  "description": "非标钣金云端小程序工单系统",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js",
+    "repair:completion": "node scripts/repair-work-order-completion.js"
+  },
+  "dependencies": {
+    "exceljs": "4.4.0",
+    "jszip": "3.10.1",
+    "mysql2": "^3.11.5"
+  }
+}

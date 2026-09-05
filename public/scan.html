@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>扫码报工</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      body {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: #f5f7fb;
+      }
+      .scan-card {
+        width: min(520px, 100%);
+      }
+      .scan-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="panel scan-card">
+      <h2>扫码报工</h2>
+      <div id="scanStatus" class="muted">正在识别二维码...</div>
+      <div class="scan-actions">
+        <button class="btn" id="openApp" style="display:none">进入报工页</button>
+        <a class="btn secondary" href="/">返回系统</a>
+      </div>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const routeToken = params.get("routeToken") || params.get("token") || "";
+      const statusNode = document.getElementById("scanStatus");
+      const openBtn = document.getElementById("openApp");
+
+      async function boot() {
+        if (!routeToken) {
+          statusNode.textContent = "二维码缺少工序参数，请重新扫码。";
+          return;
+        }
+        try {
+          const res = await fetch(`/api/qr/resolve?routeToken=${encodeURIComponent(routeToken)}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "二维码无效");
+          statusNode.innerHTML = `
+            <p><strong>${data.workOrder.workNo}</strong> ${data.workOrder.productName}</p>
+            <p>工序：${data.route.processName}</p>
+            <p>计划：${data.route.planQty} ${data.workOrder?.order?.quantityUnit === "套" ? "套" : "件"}，已完成：${data.route.completedQty || 0} ${data.workOrder?.order?.quantityUnit === "套" ? "套" : "件"}</p>
+            <p class="muted">正式微信小程序上线后，扫码会直接进入这道工序的报工页。</p>
+          `;
+          openBtn.style.display = "inline-flex";
+          openBtn.onclick = () => {
+            localStorage.setItem("pending_route_id", data.routeId);
+            location.href = "/";
+          };
+        } catch (error) {
+          statusNode.textContent = error.message;
+        }
+      }
+
+      boot();
+    </script>
+  </body>
+</html>

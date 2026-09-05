@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>非标钣金工单系统上线教学</title>
+    <style>
+      :root {
+        --ink: #0b1830;
+        --muted: #5c6b82;
+        --line: #d8e1ec;
+        --panel: #ffffff;
+        --bg: #f5f7fb;
+        --brand: #0f766e;
+        --warn: #b45309;
+        --danger: #b42318;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--bg);
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        line-height: 1.65;
+      }
+
+      main {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 32px 18px 56px;
+      }
+
+      header {
+        margin-bottom: 22px;
+        padding: 24px;
+        background: #102033;
+        color: white;
+        border-radius: 8px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        line-height: 1.25;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 30px;
+      }
+
+      h2 {
+        margin: 28px 0 12px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid var(--line);
+        font-size: 22px;
+      }
+
+      h3 {
+        margin: 20px 0 8px;
+        font-size: 18px;
+      }
+
+      p {
+        margin: 8px 0;
+      }
+
+      a {
+        color: var(--brand);
+      }
+
+      code,
+      pre {
+        font-family: Consolas, "Courier New", monospace;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #eef3f7;
+      }
+
+      pre {
+        overflow: auto;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #0b1220;
+        color: #e9f6ff;
+      }
+
+      .card {
+        margin: 14px 0;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .notice {
+        border-left: 5px solid var(--brand);
+      }
+
+      .warn {
+        border-left: 5px solid var(--warn);
+      }
+
+      .danger {
+        border-left: 5px solid var(--danger);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 10px 0;
+        background: white;
+      }
+
+      th,
+      td {
+        padding: 10px;
+        border: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eef3f7;
+      }
+
+      .checklist li {
+        margin: 6px 0;
+      }
+
+      .step-number {
+        display: inline-grid;
+        width: 28px;
+        height: 28px;
+        margin-right: 8px;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--brand);
+        color: white;
+        font-weight: 700;
+      }
+
+      @media (max-width: 760px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        header {
+          padding: 18px;
+        }
+
+        h1 {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>非标钣金工单系统上线教学</h1>
+        <p>适用于当前版本：网页后台 + 电视看板 + 微信小程序扫码报工。</p>
+        <p class="muted">编写日期：2026-06-03。正式上线前，请以微信公众平台、云服务商、工信部备案系统的实际页面为准。</p>
+      </header>
+
+      <section class="card notice">
+        <h2>上线前你要先理解的事</h2>
+        <p>本系统现在已经具备第一版上线需要的核心链路：后台建订单、选择工艺路线、派工、生成工序二维码、小程序扫码报工、上传异常图片、电视看板查看进度。</p>
+        <p>上线不是简单把本地文件复制出去，而是要让系统具备三个正式条件：公网 HTTPS 域名、稳定运行的后端服务、微信小程序合法域名和扫码规则配置。</p>
+      </section>
+
+      <h2>第一部分：前 4 个步骤详细操作</h2>
+
+      <section class="card">
+        <h3><span class="step-number">1</span>申请并准备微信小程序账号</h3>
+        <p><strong>目标：</strong>拿到小程序 AppID，并具备上传体验版、提交审核、发布小程序的权限。</p>
+
+        <h3>1.1 准备资料</h3>
+        <ul class="checklist">
+          <li>营业执照：建议用公司或个体工商户主体，不建议用个人主体。</li>
+          <li>法人或管理员身份证、手机号、邮箱。</li>
+          <li>公司简称、系统名称、logo。名称可先用“宁波未来机械工单”或类似名称。</li>
+          <li>管理员微信号：后面登录公众平台、扫码确认、上传审核都会用到。</li>
+          <li>隐私政策需要的信息：系统会收集手机号、姓名、报工数据、现场图片。</li>
+        </ul>
+
+        <h3>1.2 注册入口</h3>
+        <ol>
+          <li>打开 <a href="https://mp.weixin.qq.com/" target="_blank">微信公众平台</a>。</li>
+          <li>点击“立即注册”。</li>
+          <li>选择“小程序”。</li>
+          <li>用一个没有注册过公众号/小程序的邮箱注册。</li>
+          <li>按页面要求完成主体信息填写和管理员绑定。</li>
+        </ol>
+
+        <h3>1.3 注册完成后要记录的信息</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>信息</th>
+              <th>在哪里看</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>AppID</td>
+              <td>微信公众平台 -> 开发管理 -> 开发设置</td>
+              <td>微信开发者工具上传小程序时使用</td>
+            </tr>
+            <tr>
+              <td>管理员微信</td>
+              <td>注册时绑定</td>
+              <td>扫码登录、体验版预览、审核发布</td>
+            </tr>
+            <tr>
+              <td>小程序名称</td>
+              <td>设置 -> 基本设置</td>
+              <td>用户在微信里看到的名称</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>1.4 添加开发成员</h3>
+        <ol>
+          <li>进入微信公众平台。</li>
+          <li>找到“成员管理”。</li>
+          <li>把需要开发或上传代码的微信号加入开发成员。</li>
+          <li>如果以后找外部技术人员上线，也只给开发权限，不要随便给管理员权限。</li>
+        </ol>
+
+        <div class="card warn">
+          <strong>注意：</strong>如果你要让工人长期稳定扫码报工，小程序必须正式发布。体验版适合测试，不适合全厂正式使用。
+        </div>
+      </section>
+
+      <section class="card">
+        <h3><span class="step-number">2</span>准备云服务器或托管云服务</h3>
+        <p><strong>目标：</strong>让现在本地的 Node.js 系统在公网上 24 小时运行，老板出差、工人手机、小程序、电视看板都能访问。</p>
+
+        <h3>2.1 第一版推荐方案</h3>
+        <p>为了尽快上线，建议先用“云服务器 + Node.js + Nginx + HTTPS”。后续订单量变大，再升级数据库、对象存储和云托管。</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>项目</th>
+              <th>建议配置</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>服务器</td>
+              <td>腾讯云、阿里云、华为云均可</td>
+              <td>尽量选中国大陆地域，访问稳定，但大陆服务器通常需要备案域名。</td>
+            </tr>
+            <tr>
+              <td>系统</td>
+              <td>Ubuntu 22.04 LTS 或 Windows Server</td>
+              <td>如果你不熟服务器，Windows 更直观；如果找技术人员部署，Ubuntu 更常见。</td>
+            </tr>
+            <tr>
+              <td>配置</td>
+              <td>2 核 4G、50G 硬盘起步</td>
+              <td>第一版工厂内部使用足够。图片多时要加硬盘或对象存储。</td>
+            </tr>
+            <tr>
+              <td>带宽</td>
+              <td>3M 起步，建议 5M</td>
+              <td>电视看板和图片上传会消耗带宽。</td>
+            </tr>
+            <tr>
+              <td>安全组</td>
+              <td>开放 80、443、22 或远程桌面端口</td>
+              <td>80/443 给网页和小程序访问；22/远程桌面给维护人员登录。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2.2 云服务器购买时怎么选</h3>
+        <ol>
+          <li>进入云服务商控制台，找到“云服务器/CVM/ECS/轻量应用服务器”。</li>
+          <li>地域选择离工厂近的地区，例如华东、上海、杭州、宁波周边可选华东区域。</li>
+          <li>镜像选择 Ubuntu 22.04 LTS，或者你熟悉 Windows 就选 Windows Server。</li>
+          <li>规格选择 2 核 4G 起步。</li>
+          <li>公网 IP 必须勾选。</li>
+          <li>安全组开放 HTTP 80、HTTPS 443、SSH 22。Windows 则还要开放远程桌面端口。</li>
+        </ol>
+
+        <h3>2.3 第一版数据风险说明</h3>
+        <p>当前系统用 <code>data/db.json</code> 存数据，适合第一版试运行和小规模使用。正式长期使用时，建议后续升级到 MySQL、PostgreSQL 或云数据库。</p>
+        <p>上线第一天就要建立备份习惯：每天备份 <code>data/db.json</code> 和 <code>public/uploads</code>。</p>
+      </section>
+
+      <section class="card">
+        <h3><span class="step-number">3</span>准备域名、备案和 HTTPS 证书</h3>
+        <p><strong>目标：</strong>让系统拥有正式访问地址，例如 <code>https://work.nbwlmachine.com</code>。微信小程序正式请求后端接口时，必须配置合法域名，并且建议使用 HTTPS。</p>
+
+        <h3>3.1 域名建议</h3>
+        <p>建议用公司主域名的子域名，例如：</p>
+        <pre>work.nbwlmachine.com
+mes.nbwlmachine.com
+gongdan.nbwlmachine.com</pre>
+
+        <h3>3.2 域名购买</h3>
+        <ol>
+          <li>在腾讯云、阿里云、华为云等平台购买域名。</li>
+          <li>完成域名实名认证。</li>
+          <li>如果公司已有域名，可以直接新增一个子域名，不需要重新买。</li>
+        </ol>
+
+        <h3>3.3 备案说明</h3>
+        <ul class="checklist">
+          <li>如果服务器在中国大陆，域名通常需要做 ICP 备案。</li>
+          <li>备案一般需要营业执照、法人信息、网站负责人信息、手机号、人脸核验等。</li>
+          <li>备案时间不是写代码能加速的，通常要预留数天到数周。</li>
+          <li>如果急着内部测试，可以先用云服务商临时域名或服务器 IP 做本地/体验版测试，但正式小程序建议用备案后的 HTTPS 域名。</li>
+        </ul>
+
+        <h3>3.4 配置 DNS</h3>
+        <p>备案和服务器准备好后，在域名解析里新增 A 记录：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>主机记录</th>
+              <th>记录值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>A</td>
+              <td>work</td>
+              <td>你的服务器公网 IP</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>配置后，访问地址就是 <code>work.你的域名.com</code>。</p>
+
+        <h3>3.5 配置 HTTPS 证书</h3>
+        <ol>
+          <li>在云服务商申请免费 SSL 证书，绑定你的子域名。</li>
+          <li>证书签发后，下载或一键部署到 Nginx。</li>
+          <li>确认浏览器访问 <code>https://你的域名</code> 没有“不安全”提示。</li>
+        </ol>
+
+        <div class="card warn">
+          <strong>重点：</strong>二维码扫码报工的正式地址依赖 <code>QR_BASE_URL</code>。上线后必须设置成你的 HTTPS 域名，不能是 <code>localhost</code>。
+        </div>
+      </section>
+
+      <section class="card">
+        <h3><span class="step-number">4</span>上传项目到服务器</h3>
+        <p><strong>目标：</strong>把当前文件夹里的系统代码放到云服务器，并能在服务器上启动。</p>
+
+        <h3>4.1 上传前先整理本地文件</h3>
+        <p>当前项目文件夹是：</p>
+        <pre>D:\codex内容\copy黑湖小工单</pre>
+        <p>上传时需要包含这些核心内容：</p>
+        <ul class="checklist">
+          <li><code>server.js</code></li>
+          <li><code>package.json</code></li>
+          <li><code>public</code> 文件夹</li>
+          <li><code>miniprogram</code> 文件夹</li>
+          <li><code>data</code> 文件夹，首次上线可以带上；后续更新不要随便覆盖线上数据。</li>
+          <li><code>cloud</code>、<code>docs</code> 可一起上传，方便维护。</li>
+        </ul>
+        <p>可以不上传这些运行日志：</p>
+        <pre>server.out.log
+server.err.log</pre>
+
+        <h3>4.2 方式 A：用远程桌面或服务器面板上传</h3>
+        <ol>
+          <li>把 <code>copy黑湖小工单</code> 文件夹压缩成 zip。</li>
+          <li>登录服务器远程桌面，或打开宝塔/云服务器文件管理器。</li>
+          <li>上传 zip 到服务器。</li>
+          <li>解压到例如 <code>/www/work-order</code> 或 <code>C:\work-order</code>。</li>
+          <li>进入解压后的目录，确认能看到 <code>server.js</code>。</li>
+        </ol>
+
+        <h3>4.3 方式 B：用命令上传到 Linux 服务器</h3>
+        <p>在你电脑 PowerShell 里执行，示例：</p>
+        <pre>scp -r "D:\codex内容\copy黑湖小工单" root@你的服务器IP:/www/work-order</pre>
+        <p>如果服务器禁止 root 登录，就把 <code>root</code> 换成云服务器创建的用户名。</p>
+
+        <h3>4.4 服务器安装 Node.js</h3>
+        <p>Linux 服务器示例：</p>
+        <pre>node -v
+npm -v</pre>
+        <p>如果提示找不到命令，需要安装 Node.js。建议使用 Node.js 20 LTS 或更新的 LTS 版本。</p>
+
+        <h3>4.5 首次启动测试</h3>
+        <p>进入项目目录：</p>
+        <pre>cd /www/work-order
+npm start</pre>
+        <p>如果看到类似 <code>系统已启动</code> 或没有报错，再在浏览器访问：</p>
+        <pre>http://服务器公网IP:3000</pre>
+        <p>能看到登录页，说明代码已经跑起来了。</p>
+
+        <div class="card danger">
+          <strong>重要：</strong>这一步只是临时测试。正式给小程序用，必须继续配置 HTTPS、反向代理、合法域名、扫码规则。
+        </div>
+      </section>
+
+      <h2>第二部分：后续上线步骤简表</h2>
+
+      <section class="card">
+        <h3>5. 设置线上环境变量</h3>
+        <pre>PORT=3000
+QR_BASE_URL=https://你的正式域名</pre>
+        <p><code>QR_BASE_URL</code> 决定后台生成二维码时写入哪个正式扫码地址。</p>
+
+        <h3>6. 配置 Nginx 和 HTTPS</h3>
+        <p>把 <code>https://你的域名</code> 转发到本机 <code>3000</code> 端口。</p>
+
+        <h3>7. 设置后台服务常驻运行</h3>
+        <p>Linux 可用 <code>pm2</code> 或 <code>systemd</code>，Windows 可用计划任务或服务管理工具。目标是服务器重启后系统自动启动。</p>
+
+        <h3>8. 微信公众平台配置 request 合法域名</h3>
+        <p>进入微信公众平台 -> 开发管理 -> 开发设置，把你的 HTTPS 域名加入 request 合法域名。</p>
+
+        <h3>9. 微信公众平台配置普通二维码跳转小程序</h3>
+        <p>配置二维码规则：</p>
+        <pre>https://你的正式域名/scan.html</pre>
+        <p>目标页面：</p>
+        <pre>pages/report/report</pre>
+
+        <h3>10. 修改小程序接口地址</h3>
+        <p>打开：</p>
+        <pre>miniprogram/utils/config.js</pre>
+        <p>改成：</p>
+        <pre>module.exports = {
+  apiBaseUrl: "https://你的正式域名",
+  cloudEnvId: "请填写微信云开发环境 ID"
+};</pre>
+
+        <h3>11. 微信开发者工具上传体验版</h3>
+        <ol>
+          <li>打开微信开发者工具。</li>
+          <li>导入 <code>miniprogram</code> 文件夹。</li>
+          <li>填写小程序 AppID。</li>
+          <li>编译、预览、真机测试。</li>
+          <li>上传体验版。</li>
+        </ol>
+
+        <h3>12. 真机测试</h3>
+        <ul class="checklist">
+          <li>老板账号能看移动看板。</li>
+          <li>主管能新建订单、派工、调整工序。</li>
+          <li>工人能登录小程序。</li>
+          <li>后台每道工序能打开二维码。</li>
+          <li>微信扫码能进入对应工序报工页。</li>
+          <li>提交报工后，电视看板能刷新显示完成时间和人员。</li>
+          <li>异常图片能上传和查看。</li>
+        </ul>
+
+        <h3>13. 提交审核并发布</h3>
+        <p>体验版测试通过后，在微信公众平台提交审核。审核通过后点击发布。</p>
+      </section>
+
+      <h2>第三部分：以后怎么更新线上软件</h2>
+
+      <section class="card">
+        <h3>每次更新前</h3>
+        <ol>
+          <li>先备份线上 <code>data/db.json</code>。</li>
+          <li>备份线上 <code>public/uploads</code>。</li>
+          <li>记录当前线上版本的压缩包。</li>
+        </ol>
+
+        <h3>只更新网页后台/后端</h3>
+        <ol>
+          <li>上传新的 <code>server.js</code>、<code>public</code>、相关配置文件。</li>
+          <li>不要覆盖线上 <code>data/db.json</code>，除非你明确要导入新数据。</li>
+          <li>重启 Node 服务。</li>
+          <li>测试登录、订单、派工、二维码、报工、电视看板。</li>
+        </ol>
+
+        <h3>更新小程序</h3>
+        <ol>
+          <li>修改 <code>miniprogram</code> 代码。</li>
+          <li>微信开发者工具编译并真机测试。</li>
+          <li>上传新版本。</li>
+          <li>提交微信审核。</li>
+          <li>审核通过后发布。</li>
+        </ol>
+
+        <h3>回滚方法</h3>
+        <p>如果更新后出问题，把上一次备份的代码包恢复回服务器，再恢复当时的 <code>data/db.json</code>，然后重启服务。</p>
+      </section>
+
+      <h2>第四部分：上线前最终检查表</h2>
+
+      <section class="card">
+        <ul class="checklist">
+          <li>小程序账号已注册，AppID 已记录。</li>
+          <li>服务器公网 IP 可访问。</li>
+          <li>域名已解析到服务器。</li>
+          <li>HTTPS 证书正常，浏览器无不安全提示。</li>
+          <li><code>QR_BASE_URL</code> 已设置成 HTTPS 正式域名。</li>
+          <li>微信 request 合法域名已配置。</li>
+          <li>普通二维码跳小程序规则已配置。</li>
+          <li>小程序 <code>apiBaseUrl</code> 已改成正式域名。</li>
+          <li>后台能新增订单并派工。</li>
+          <li>每道工序能打开二维码。</li>
+          <li>工人扫码能进入对应工序报工。</li>
+          <li>电视看板能显示报工时间、人员、交期颜色。</li>
+          <li>每天自动或手动备份数据。</li>
+        </ul>
+      </section>
+
+      <h2>参考入口</h2>
+      <section class="card">
+        <ul>
+          <li><a href="https://mp.weixin.qq.com/" target="_blank">微信公众平台</a></li>
+          <li><a href="https://developers.weixin.qq.com/miniprogram/introduction/qrcode.html" target="_blank">微信小程序：扫普通链接二维码打开小程序</a></li>
+          <li><a href="https://developers.weixin.qq.com/miniprogram/dev/framework/ability/network.html" target="_blank">微信小程序：网络请求与合法域名</a></li>
+          <li><a href="https://developers.weixin.qq.com/miniprogram/dev/devtools/download.html" target="_blank">微信开发者工具下载</a></li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

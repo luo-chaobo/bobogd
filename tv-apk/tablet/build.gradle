@@ -1,0 +1,33 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.bobogd.tablet"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.bobogd.tablet"
+        minSdk 26
+        targetSdk 35
+        versionCode 5
+        versionName "1.0.4"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        exclude "lib/x86/**"
+        exclude "lib/x86_64/**"
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+dependencies {
+    implementation "org.mozilla.geckoview:geckoview:128.0.20240725162350"
+}

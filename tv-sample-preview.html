@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>波波工单电视看板样张</title>
+  <link rel="stylesheet" href="public/tv.css">
+</head>
+<body class="tv-carousel-mode" data-tv-ratio="auto">
+  <main id="tv" class="tv">
+    <header class="header">
+      <div class="title">
+        <div class="logo">◇</div>
+        <div>
+          <h1>生产状态监控看板</h1>
+          <div class="subtitle">PRODUCTION CONTROL</div>
+        </div>
+      </div>
+      <div class="company-name">宁波未来机械</div>
+      <div class="live"><span class="dot"></span><span>LIVE</span><span>2026/06/30 20:30:00</span></div>
+    </header>
+    <div class="tv-screen-viewport">
+      <div class="tv-screen-track">
+        <section class="tv-screen tv-summary-screen">
+          <section class="metrics">
+            <div class="metric warn"><div class="label">急单</div><div class="value">2</div></div>
+            <div class="metric danger"><div class="label">延期工单</div><div class="value">5</div></div>
+            <div class="metric danger"><div class="label">48h加急</div><div class="value">1</div></div>
+            <div class="metric"><div class="label">待加工工序</div><div class="value">27</div></div>
+            <div class="metric"><div class="label">工单总数</div><div class="value">10</div></div>
+            <div class="metric"><div class="label">今日完成工单</div><div class="value">0</div></div>
+          </section>
+          <section class="charts">
+            <div class="panel">
+              <h2>准时率仪表</h2>
+              <div class="gauge" style="--rate:50"><strong>50%</strong></div>
+            </div>
+            <div class="panel">
+              <h2>工单状态分布</h2>
+              <div class="donut-legend">
+                <span><i class="legend-dot"></i>执行中 7</span>
+                <span><i class="legend-dot red"></i>延期 5</span>
+                <span><i class="legend-dot green"></i>今日完成 0</span>
+              </div>
+              <div class="gauge compact-gauge status-donut" style="--status-active-end:58%;--status-delayed-end:100%"><strong>12</strong></div>
+            </div>
+            <div class="panel">
+              <h2>车间工序负荷</h2>
+              <div class="process-load-window">
+                <div class="process-load-track">
+                  <div class="process-load-page">
+                    <div class="process-load-bar-item"><div class="process-load-bar"><div class="process-load-value completed-value">0</div><div class="process-load-value remaining-value">5</div><span class="completed" style="height:0"></span><span class="remaining" style="height:83%"></span></div><div class="process-load-name">图纸设计</div></div>
+                    <div class="process-load-bar-item"><div class="process-load-bar"><div class="process-load-value completed-value">0</div><div class="process-load-value remaining-value">4</div><span class="completed" style="height:0"></span><span class="remaining" style="height:67%"></span></div><div class="process-load-name">激光</div></div>
+                    <div class="process-load-bar-item"><div class="process-load-bar"><div class="process-load-value completed-value">0</div><div class="process-load-value remaining-value">4</div><span class="completed" style="height:0"></span><span class="remaining" style="height:67%"></span></div><div class="process-load-name">折弯</div></div>
+                    <div class="process-load-bar-item"><div class="process-load-bar"><div class="process-load-value completed-value">0</div><div class="process-load-value remaining-value">2</div><span class="completed" style="height:0"></span><span class="remaining" style="height:33%"></span></div><div class="process-load-name">压铆</div></div>
+                    <div class="process-load-bar-item"><div class="process-load-bar"><div class="process-load-value completed-value">0</div><div class="process-load-value remaining-value">3</div><span class="completed" style="height:0"></span><span class="remaining" style="height:50%"></span></div><div class="process-load-name">打孔攻丝</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <h2>近日报工趋势</h2>
+              <svg class="trend-line-chart" viewBox="0 0 420 104" preserveAspectRatio="none">
+                <polyline class="trend-grid-line" points="22,18 398,18"></polyline>
+                <polyline class="trend-grid-line" points="22,76 398,76"></polyline>
+                <polyline class="trend-line" points="22,76 85,76 148,76 210,18 273,18 336,18 398,76"></polyline>
+                <g fill="none">
+                  <circle class="trend-dot" cx="22" cy="76" r="4"></circle><circle class="trend-dot" cx="85" cy="76" r="4"></circle><circle class="trend-dot" cx="148" cy="76" r="4"></circle><circle class="trend-dot" cx="210" cy="18" r="4"></circle><circle class="trend-dot" cx="273" cy="18" r="4"></circle><circle class="trend-dot" cx="336" cy="18" r="4"></circle><circle class="trend-dot" cx="398" cy="76" r="4"></circle>
+                </g>
+                <g class="trend-value"><text x="22" y="66">0</text><text x="85" y="66">0</text><text x="148" y="66">0</text><text x="210" y="12">1</text><text x="273" y="12">1</text><text x="336" y="12">1</text><text x="398" y="66">0</text></g>
+                <g class="trend-label"><text x="22" y="98">06.24</text><text x="85" y="98">06.25</text><text x="148" y="98">06.26</text><text x="210" y="98">06.27</text><text x="273" y="98">06.28</text><text x="336" y="98">06.29</text><text x="398" y="98">06.30</text></g>
+              </svg>
+            </div>
+          </section>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

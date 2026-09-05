@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120" viewBox="0 0 160 120">
+  <rect width="160" height="120" rx="10" fill="#f8fafc"/>
+  <path d="M30 88h100M42 72l28-32h48M70 40l48 32M70 40v48M118 40v48" fill="none" stroke="#0f766e" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="48" y="78" width="64" height="26" rx="6" fill="#0f766e"/>
+  <text x="80" y="97" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#fff">CAD</text>
+</svg>

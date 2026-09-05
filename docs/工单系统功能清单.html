@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>宁波未来机械工单系统功能清单</title>
+    <style>
+      :root {
+        --bg: #f3f7fb;
+        --card: #ffffff;
+        --ink: #071427;
+        --muted: #65738a;
+        --line: #dce5ef;
+        --green: #127c6b;
+        --green-soft: #e7f4f1;
+        --blue: #1d4ed8;
+        --red: #c3261d;
+        --amber: #b45309;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        line-height: 1.72;
+      }
+
+      .page {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 32px 24px 56px;
+      }
+
+      .cover {
+        background: linear-gradient(135deg, #0b5a51 0%, #123149 100%);
+        color: #fff;
+        padding: 34px 38px;
+        border-radius: 10px;
+        box-shadow: 0 18px 45px rgba(16, 46, 72, 0.18);
+      }
+
+      .cover h1 {
+        margin: 0 0 10px;
+        font-size: 34px;
+        line-height: 1.2;
+      }
+
+      .cover p {
+        margin: 0;
+        color: #d8ece9;
+        font-size: 17px;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 20px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 30px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.13);
+        color: #eefdfb;
+        font-size: 14px;
+      }
+
+      .toc,
+      section {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        margin-top: 18px;
+        padding: 24px 28px;
+        box-shadow: 0 10px 24px rgba(18, 49, 73, 0.06);
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 24px;
+        line-height: 1.35;
+      }
+
+      h3 {
+        margin: 20px 0 8px;
+        font-size: 18px;
+      }
+
+      ul {
+        margin: 8px 0 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      .toc-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+      }
+
+      .toc a {
+        display: block;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #f5f8fb;
+        color: var(--ink);
+        text-decoration: none;
+        border: 1px solid #e5ecf4;
+      }
+
+      .toc a:hover {
+        color: var(--green);
+        border-color: #b8d9d2;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 14px;
+      }
+
+      .feature-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+        background: #fbfdff;
+      }
+
+      .feature-card h3 {
+        margin-top: 0;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 2px 9px;
+        border-radius: 999px;
+        background: var(--green-soft);
+        color: var(--green);
+        font-size: 13px;
+        margin-right: 6px;
+      }
+
+      .tag.blue {
+        background: #eaf1ff;
+        color: var(--blue);
+      }
+
+      .tag.red {
+        background: #fff0f0;
+        color: var(--red);
+      }
+
+      .tag.amber {
+        background: #fff7ed;
+        color: var(--amber);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+        font-size: 15px;
+      }
+
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        vertical-align: top;
+        text-align: left;
+      }
+
+      th {
+        background: #f2f6fa;
+        color: #304158;
+      }
+
+      .note {
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-left: 4px solid var(--green);
+        background: var(--green-soft);
+        color: #17463f;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .checklist {
+        columns: 2;
+        column-gap: 28px;
+      }
+
+      @media (max-width: 720px) {
+        .page {
+          padding: 18px 12px 36px;
+        }
+
+        .cover,
+        section,
+        .toc {
+          padding: 20px;
+        }
+
+        .cover h1 {
+          font-size: 26px;
+        }
+
+        .checklist {
+          columns: 1;
+        }
+      }
+
+      @media print {
+        body {
+          background: #fff;
+        }
+
+        .page {
+          max-width: none;
+          padding: 0;
+        }
+
+        .cover,
+        .toc,
+        section {
+          box-shadow: none;
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="cover">
+        <h1>宁波未来机械工单系统功能清单</h1>
+        <p>面向非标钣金生产的订单工单、工艺派发、扫码报工、异常处理、生产看板和基础报表系统。</p>
+        <div class="meta">
+          <span class="pill">当前版本：正式上线前功能版</span>
+          <span class="pill">适用场景：非标钣金 / 小批量多品种 / 车间报工</span>
+          <span class="pill">整理日期：2026/06/06</span>
+        </div>
+      </header>
+
+      <nav class="toc">
+        <h2>目录</h2>
+        <div class="toc-grid">
+          <a href="#overview">1. 系统总览</a>
+          <a href="#access">2. 访问地址与入口</a>
+          <a href="#roles">3. 岗位与权限</a>
+          <a href="#web">4. 网页后台功能</a>
+          <a href="#mini">5. 手机端/小程序功能</a>
+          <a href="#tv">6. 电视大屏看板</a>
+          <a href="#data">7. 数据关联与追溯</a>
+          <a href="#security">8. 安全与上线配置</a>
+          <a href="#todo">9. 后续预留升级口</a>
+        </div>
+      </nav>
+
+      <section id="overview">
+        <h2>1. 系统总览</h2>
+        <p>本系统用于把非标钣金工厂从纸质工单、微信群催单、人工统计进度，升级为网页后台管理、手机扫码报工、电视大屏展示和数据报表统计的一体化工单系统。</p>
+        <div class="grid">
+          <div class="feature-card">
+            <h3>核心目标</h3>
+            <ul>
+              <li>让办公室/跟单能创建订单和工单。</li>
+              <li>让生产主管能按每单实际情况选择工艺路线并派工。</li>
+              <li>让工人通过手机任务页或二维码扫码报工。</li>
+              <li>让老板和主管远程查看生产进度、异常、延期和大屏看板。</li>
+              <li>让电视持续展示全厂工序负荷和加工工单进度。</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <h3>主要入口</h3>
+            <ul>
+              <li>网页后台：办公室、生产主管、老板、管理员使用。</li>
+              <li>微信小程序：工人报工、主管移动查看、老板移动查看。</li>
+              <li>电视大屏：车间、办公室或老板办公室投屏展示。</li>
+              <li>二维码页面：每个工单的每道工序均可扫码进入报工。</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <h3>第一批标准工序</h3>
+            <p>
+              <span class="tag">图纸设计</span>
+              <span class="tag">激光</span>
+              <span class="tag">折弯</span>
+              <span class="tag">压铆</span>
+              <span class="tag">打孔攻丝</span>
+              <span class="tag">焊接</span>
+              <span class="tag">打磨</span>
+              <span class="tag">喷塑</span>
+              <span class="tag">组装</span>
+            </p>
+            <p class="muted">质检作为系统角色和看板节点已支持，标准工序后续可继续扩展。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="access">
+        <h2>2. 访问地址与入口</h2>
+        <p>以下为当前系统上线后使用的主要网址和小程序入口。正式使用时，建议把后台地址、大屏地址分别收藏到办公室电脑、主管电脑和电视浏览器中。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>入口名称</th>
+              <th>访问地址</th>
+              <th>主要用途</th>
+              <th>使用人员</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>网页后台 / 后端接口</td>
+              <td><a href="https://bobogd.wljixie.com" target="_blank">https://bobogd.wljixie.com</a></td>
+              <td>登录网页后台、维护客户、创建订单工单、派工、处理异常、查看报表；小程序也通过该域名请求接口和上传图片。</td>
+              <td>老板、生产主管、办公室/跟单、管理员</td>
+            </tr>
+            <tr>
+              <td>电视大屏看板</td>
+              <td><a href="https://screen.wljixie.com/tv.html" target="_blank">https://screen.wljixie.com/tv.html</a></td>
+              <td>车间电视或办公室大屏展示生产状态、急单、延期、工序负荷、近日报工趋势和加工工单进度。</td>
+              <td>车间现场、老板、主管、办公室</td>
+            </tr>
+            <tr>
+              <td>手机横屏大屏看板</td>
+              <td><a href="https://screen.wljixie.com/tv.html?mobile=1" target="_blank">https://screen.wljixie.com/tv.html?mobile=1</a></td>
+              <td>小程序内横屏查看大屏看板时使用，页面会自动压缩图表和工单布局，适配手机横屏。</td>
+              <td>老板、生产主管、管理员</td>
+            </tr>
+            <tr>
+              <td>扫码报工入口</td>
+              <td><code>https://bobogd.wljixie.com/scan.html?routeToken=...</code></td>
+              <td>每道工序二维码对应的扫码报工地址，由系统自动生成；工人不需要手动输入，直接微信扫码即可。</td>
+              <td>各工种师傅、车间工人、质检</td>
+            </tr>
+            <tr>
+              <td>单道工序二维码</td>
+              <td><code>https://bobogd.wljixie.com/api/qr/route/工序ID.svg</code></td>
+              <td>后台“派工与工艺路线”中点击单道工序的“二维码”按钮打开，用于单独打印或临时扫码。</td>
+              <td>生产主管、管理员</td>
+            </tr>
+            <tr>
+              <td>整单 A4 二维码打印页</td>
+              <td><code>https://bobogd.wljixie.com/qr-print.html?workOrderId=工单ID</code></td>
+              <td>后台“派工与工艺路线”中点击“打印二维码”打开，一张 A4 显示该工单全部工序二维码。</td>
+              <td>生产主管、办公室/跟单、管理员</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          微信小程序正式版需要在微信公众平台配置合法域名：request、uploadFile、downloadFile 使用 <code>https://bobogd.wljixie.com</code>；web-view 业务域名使用 <code>https://screen.wljixie.com</code>。
+        </div>
+      </section>
+
+      <section id="roles">
+        <h2>3. 岗位与权限</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>角色</th>
+              <th>主要权限</th>
+              <th>典型使用人</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>老板</td>
+              <td>查看全厂数据、生产看板、异常、延期、手机横屏大屏；可进入后台管理。</td>
+              <td>企业负责人</td>
+            </tr>
+            <tr>
+              <td>生产主管</td>
+              <td>查看生产总览，维护工艺路线，派工，处理异常，调整看板设置。</td>
+              <td>车间主管、生产负责人</td>
+            </tr>
+            <tr>
+              <td>办公室/跟单</td>
+              <td>维护客户资料，创建订单和工单，查看交期和生产进度。</td>
+              <td>跟单、文员、计划员</td>
+            </tr>
+            <tr>
+              <td>激光师傅</td>
+              <td>只能报被派给自己的激光工序。</td>
+              <td>激光切割岗位</td>
+            </tr>
+            <tr>
+              <td>折弯师傅</td>
+              <td>只能报被派给自己的折弯工序。</td>
+              <td>折弯岗位</td>
+            </tr>
+            <tr>
+              <td>焊接师傅</td>
+              <td>只能报被派给自己的焊接工序。</td>
+              <td>焊接岗位</td>
+            </tr>
+            <tr>
+              <td>打磨师傅</td>
+              <td>只能报被派给自己的打磨工序。</td>
+              <td>打磨岗位</td>
+            </tr>
+            <tr>
+              <td>喷塑师傅</td>
+              <td>只能报被派给自己的喷塑工序。</td>
+              <td>喷塑/喷粉岗位</td>
+            </tr>
+            <tr>
+              <td>质检</td>
+              <td>查看和处理质检相关任务，支持异常处理和质检工序报工。</td>
+              <td>质检员</td>
+            </tr>
+            <tr>
+              <td>管理员</td>
+              <td>维护员工、角色、标准工序、看板设置和系统基础资料。</td>
+              <td>系统管理员</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">扫码报工采用“双重校验”：先校验是否派给当前员工，再校验岗位是否允许报对应工序，服务端也会再次校验，防止绕过页面提交。</div>
+      </section>
+
+      <section id="web">
+        <h2>4. 网页后台功能</h2>
+
+        <h3>3.1 登录与后台框架</h3>
+        <ul>
+          <li>正式版登录页，手机号和密码默认为空。</li>
+          <li>登录后左上角显示当前账号职务和姓名，职务在上、姓名在下。</li>
+          <li>支持退出登录。</li>
+          <li>按角色展示后台管理入口。</li>
+        </ul>
+
+        <h3>3.2 生产总览</h3>
+        <ul>
+          <li>展示生产中工单、已完成工单、延期风险、待处理异常等核心指标。</li>
+          <li>工序负荷按 9 道标准工序 3×3 展示。</li>
+          <li>工序负荷显示“今日完成的工序数量 / 待完成的工序数量”。</li>
+          <li>生产进度看板展示工单、客户/产品、当前工序、交期、状态、进度、异常。</li>
+          <li>后台生产进度看板显示订单备注，便于查看特殊要求、包装、交货说明。</li>
+          <li>生产总览中的进度看板不提供删除按钮，避免误删。</li>
+        </ul>
+
+        <h3>3.3 客户资料</h3>
+        <ul>
+          <li>新增客户：客户名称、联系人、联系电话、地址、备注。</li>
+          <li>客户列表展示客户、联系人、电话、地址、备注。</li>
+          <li>支持删除客户。</li>
+          <li>已有关联订单的客户禁止删除，避免破坏历史订单数据。</li>
+        </ul>
+
+        <h3>3.4 订单与工单</h3>
+        <ul>
+          <li>新建订单时默认订单号显示当天日期，格式为 YYYYMMDD，可手动修改。</li>
+          <li>客户默认为空，必须手动选择。</li>
+          <li>支持录入产品名称、图号/版本、数量、交期、优先级、默认派给、备注。</li>
+          <li>优先级支持普通和急单，急单会关联大屏统计。</li>
+          <li>交期选择使用 yyyy/mm/dd 占位，选择后显示具体日期。</li>
+          <li>保存前校验必填项，未填完整会提示。</li>
+          <li>保存订单时同步生成工单和所选工艺路线。</li>
+          <li>工艺路线可按每个订单实际情况勾选，默认排序为图纸设计、激光、折弯、压铆、打孔攻丝、焊接、打磨、喷塑、组装。</li>
+          <li>支持删除输错的未报工工单；已有报工的工单禁止删除。</li>
+        </ul>
+
+        <h3>3.5 派工与工艺路线</h3>
+        <ul>
+          <li>每张工单可拥有不同工序路线。</li>
+          <li>支持中途新增工序，新增时选择工序、派给员工、目标完成时间。</li>
+          <li>支持删除未完成且未报工的工序。</li>
+          <li>状态已完成或已有报工记录的工序禁止删除。</li>
+          <li>每道工序可派给具体员工。</li>
+          <li>派工下拉按岗位分组，例如“激光师傅 张三”；电视看板上只显示员工姓名。</li>
+          <li>每道工序可设置目标完成时间，未设置时显示 yyyy/mm/dd --:--。</li>
+          <li>选择目标完成时间后显示 YYYY/MM/DD HH:mm。</li>
+          <li>工序状态支持待开始、进行中、暂停、已完成、返工、异常。</li>
+          <li>每道工序支持单独生成二维码。</li>
+          <li>每个工单支持生成整张 A4 工序二维码打印页，一张纸包含全部工序二维码和对应工序名。</li>
+        </ul>
+
+        <h3>3.6 异常返工</h3>
+        <ul>
+          <li>后台展示所有异常与返工记录。</li>
+          <li>异常关联工单、工序、上报人、异常类型、异常描述和现场图片。</li>
+          <li>主管、质检、管理员、老板可处理异常。</li>
+          <li>可填写处理说明并标记已解决。</li>
+          <li>异常解决后保留历史记录。</li>
+        </ul>
+
+        <h3>3.7 基础报表</h3>
+        <ul>
+          <li>按员工统计报工件数。</li>
+          <li>展示报工记录明细：时间、人员、工单、工序、完成件数、合格/不良/返工、备注。</li>
+          <li>支持导出报工 CSV。</li>
+          <li>支持导出完整 JSON 数据，便于备份或迁移。</li>
+          <li>员工账号删除后，历史报工仍显示删除前姓名，并标记“已删除”。</li>
+        </ul>
+
+        <h3>3.8 基础设置</h3>
+        <ul>
+          <li>新增员工：姓名、手机号、角色、初始密码。</li>
+          <li>员工账号列表支持岗位角色修改。</li>
+          <li>当前登录账号不能修改自己的角色，防止误操作导致无权限。</li>
+          <li>员工账号支持完全删除，从员工列表中移除。</li>
+          <li>删除员工前保留历史快照：员工 ID、姓名、手机号、原角色、删除时间。</li>
+          <li>删除员工后，未完成且仍派给该员工的工序会自动变为未派工。</li>
+          <li>删除员工后，原手机号可以重新新增为新账号。</li>
+          <li>新增工序：支持追加自定义工序。</li>
+          <li>标准工序列表按既定顺序展示。</li>
+          <li>大屏看板设置支持翻页/轮播开关。</li>
+          <li>大屏看板轮播间隔可设置，范围为 30 到 600 秒。</li>
+          <li>显示器比例支持自动适配、16:9、16:10、21:9、4:3。</li>
+        </ul>
+      </section>
+
+      <section id="mini">
+        <h2>5. 手机端/小程序功能</h2>
+
+        <h3>4.1 登录</h3>
+        <ul>
+          <li>正式版登录页，显示“宁波未来机械工单系统”。</li>
+          <li>手机号和密码输入框默认空白。</li>
+          <li>登录后按岗位进入任务、看板和异常处理。</li>
+          <li>支持退出登录和切换账号。</li>
+          <li>未登录扫码时，会先跳转登录，登录后继续进入对应工序。</li>
+        </ul>
+
+        <h3>4.2 我的任务</h3>
+        <ul>
+          <li>顶部显示当前登录岗位和姓名，岗位在上、姓名在下。</li>
+          <li>工人只看到派给自己的未完成任务。</li>
+          <li>支持“扫码报工”按钮。</li>
+          <li>支持开始、暂停工序。</li>
+          <li>支持进入报工表单。</li>
+          <li>任务卡显示工序名、产品名、工单号、剩余数量、完成进度和当前状态。</li>
+        </ul>
+
+        <h3>4.3 扫码报工</h3>
+        <ul>
+          <li>每道工序二维码扫码后进入对应工序报工。</li>
+          <li>不同工种只能扫对应工序二维码。</li>
+          <li>激光师傅只能报激光。</li>
+          <li>折弯师傅只能报折弯。</li>
+          <li>焊接师傅只能报焊接。</li>
+          <li>打磨师傅只能报打磨。</li>
+          <li>喷塑师傅只能报喷塑。</li>
+          <li>质检只能报质检。</li>
+          <li>普通车间工人可报图纸设计、压铆、打孔攻丝、组装等通用工序。</li>
+          <li>若二维码工序未派给当前员工，提示只能报自己的任务。</li>
+          <li>若岗位不匹配，提示当前工种不能报此工序。</li>
+        </ul>
+
+        <h3>4.4 提交报工</h3>
+        <ul>
+          <li>完成件数必填。</li>
+          <li>可填写合格数量、不良数量、返工数量。</li>
+          <li>可填写现场备注。</li>
+          <li>可上传现场图片。</li>
+          <li>可填写异常类型和异常说明。</li>
+          <li>提交后自动更新工序完成数量、工序状态、工单进度和大屏展示。</li>
+          <li>当完成数量达到计划数量时，工序自动进入已完成状态。</li>
+          <li>若填写异常信息，会自动生成异常记录。</li>
+        </ul>
+
+        <h3>4.5 手机生产看板</h3>
+        <ul>
+          <li>展示生产中数量、已完成数量、延期数量、异常数量。</li>
+          <li>展示加工工单列表。</li>
+          <li>每个工单显示产品名、工单号、客户、交期和状态。</li>
+          <li>进度条改为按工序分段的彩色进度条。</li>
+          <li>每道工序有独立颜色，色块下方显示中文工序名。</li>
+          <li>已完成工序显示实色，当前工序高亮，未开始工序降低透明度。</li>
+          <li>老板、生产主管、管理员可看到横屏查看大屏看板入口。</li>
+          <li>工人账号不显示大屏入口。</li>
+        </ul>
+
+        <h3>4.6 手机异常处理</h3>
+        <ul>
+          <li>手机端展示异常列表。</li>
+          <li>异常卡显示异常类型、工单、工序、上报人、说明和图片。</li>
+          <li>主管、质检、老板、管理员可处理异常。</li>
+          <li>处理后同步回后台和看板。</li>
+        </ul>
+      </section>
+
+      <section id="tv">
+        <h2>6. 电视大屏看板</h2>
+
+        <h3>5.1 大屏基础展示</h3>
+        <ul>
+          <li>大屏标题为生产状态监控看板，中间显示“宁波未来机械”。</li>
+          <li>右上角显示 LIVE 状态和实时时钟。</li>
+          <li>顶部指标展示急单、延期工单、48h 加急、待加工工序、工单总数、今日完成工单。</li>
+          <li>适合电视、车间大屏、办公室显示器长期展示。</li>
+        </ul>
+
+        <h3>5.2 图表区</h3>
+        <ul>
+          <li>准时率仪表：显示当前准时率。</li>
+          <li>工单状态分布：展示执行中、延期、今日完成。</li>
+          <li>车间工序负荷：显示 9 道工序的今日完成数量和待完成数量。</li>
+          <li>工序负荷采用上下分段柱状图，上方为今日完成，下方为待完成。</li>
+          <li>近日报工趋势：显示最近 7 日每日完成工单数量。</li>
+        </ul>
+
+        <h3>5.3 加工工单区</h3>
+        <ul>
+          <li>按交期排序：延期单优先，其次 48 小时内加急，再按交期远近排序。</li>
+          <li>延期单使用橙红色警示。</li>
+          <li>48 小时内加急单使用浅红色警示。</li>
+          <li>普通单按交期先后排列。</li>
+          <li>每行展示状态、工单号、产品、客户、件数、总进度、工序节点、交期。</li>
+          <li>每个工序节点展示完成数量、工序名、完成时间、目标完成时间、报工人。</li>
+          <li>工人扫码或小程序点击完成后的时间会体现到对应工序节点上。</li>
+          <li>一页显示不下时，按设置的间隔时间自动翻页轮播。</li>
+        </ul>
+
+        <h3>5.4 手机横屏大屏适配</h3>
+        <ul>
+          <li>小程序内老板、生产主管、管理员可横屏打开大屏页面。</li>
+          <li>手机横屏访问时自动启用 mobile 模式。</li>
+          <li>手机横屏模式压缩标题、汇总指标和图表高度。</li>
+          <li>手机横屏模式保证加工工单区域显示出来。</li>
+          <li>手机横屏模式下每页根据高度显示 1 到 3 条加工工单。</li>
+        </ul>
+      </section>
+
+      <section id="data">
+        <h2>7. 数据关联与追溯</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>数据对象</th>
+              <th>关联关系</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>客户</td>
+              <td>客户关联订单。</td>
+              <td>追踪客户、联系人、电话、地址和备注。</td>
+            </tr>
+            <tr>
+              <td>订单</td>
+              <td>订单关联客户，并生成工单。</td>
+              <td>记录产品、数量、交期、优先级、备注和图号。</td>
+            </tr>
+            <tr>
+              <td>工单</td>
+              <td>工单关联订单和多道工序。</td>
+              <td>作为生产执行的主线。</td>
+            </tr>
+            <tr>
+              <td>工序路线</td>
+              <td>工序关联工单、标准工序、派工员工和目标完成时间。</td>
+              <td>记录每道工序的进度、状态、完成时间和报工人。</td>
+            </tr>
+            <tr>
+              <td>报工记录</td>
+              <td>报工关联工单、工序、报工人。</td>
+              <td>统计完成件数、合格、不良、返工、备注和图片。</td>
+            </tr>
+            <tr>
+              <td>异常记录</td>
+              <td>异常关联工单、工序、上报人。</td>
+              <td>追踪现场异常、返工、处理结果和图片。</td>
+            </tr>
+            <tr>
+              <td>员工历史快照</td>
+              <td>删除员工时保存姓名、手机号、角色和删除时间。</td>
+              <td>保证历史报工、异常、审计记录仍可追溯到原人员。</td>
+            </tr>
+            <tr>
+              <td>审计日志</td>
+              <td>记录关键操作人、操作类型、对象和时间。</td>
+              <td>用于后续排查误操作、追踪删除和角色修改。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="security">
+        <h2>8. 安全与上线配置</h2>
+        <div class="grid">
+          <div class="feature-card">
+            <h3>账号安全</h3>
+            <ul>
+              <li>所有接口需要登录用户 ID。</li>
+              <li>不同角色对应不同操作权限。</li>
+              <li>当前账号不允许删除自己。</li>
+              <li>当前账号不允许修改自己的角色。</li>
+              <li>删除后的员工不能继续登录。</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <h3>扫码安全</h3>
+            <ul>
+              <li>二维码绑定具体工序。</li>
+              <li>扫码后先解析工序，再校验当前用户权限。</li>
+              <li>工种不匹配时禁止进入报工。</li>
+              <li>未派给当前员工时禁止报工。</li>
+              <li>服务端再次校验，防止绕过前端提交。</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <h3>正式上线依赖</h3>
+            <ul>
+              <li>服务器部署后台和接口。</li>
+              <li>域名解析到服务器。</li>
+              <li>配置 HTTPS 证书。</li>
+              <li>微信公众平台配置 request/upload/download 合法域名。</li>
+              <li>微信公众平台配置 web-view 业务域名。</li>
+              <li>业务域名需要上传微信校验文件。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="todo">
+        <h2>9. 后续预留升级口</h2>
+        <ul class="checklist">
+          <li>对接真实微信登录和 OpenID。</li>
+          <li>增加管理员重置员工密码。</li>
+          <li>增加订单编辑功能。</li>
+          <li>增加工单复制和批量创建。</li>
+          <li>增加图纸文件上传和版本管理。</li>
+          <li>增加库存、领料、余料管理。</li>
+          <li>增加计件工资统计。</li>
+          <li>增加按客户、产品、员工、工序的多维报表。</li>
+          <li>增加导入 Excel 创建订单。</li>
+          <li>增加导出日报、周报、月报。</li>
+          <li>增加设备状态和设备报修。</li>
+          <li>增加二维码流转卡打印模板。</li>
+          <li>增加工序排产甘特图。</li>
+          <li>增加延期原因分析。</li>
+          <li>增加异常闭环审批。</li>
+          <li>对接 ERP、财务、CAM 或钣金展开软件。</li>
+          <li>增加数据库定时备份。</li>
+          <li>增加云端多租户和权限细分。</li>
+        </ul>
+        <div class="note">建议正式上线后先稳定使用“订单、工艺路线、扫码报工、异常、大屏、基础报表”这条主流程，再按真实生产痛点逐步升级。</div>
+      </section>
+    </main>
+  </body>
+</html>
