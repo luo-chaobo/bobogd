@@ -99,12 +99,14 @@ test("exposes draft update, detail, supplement and granular subscription routes"
   const calls = [];
   const api = createApiClient({ baseUrl: "https://api.example.com", request: async (options) => { calls.push(options); return {}; } });
   await api.bindPhone("13812345678", "mock:13812345678", "token");
+  await api.bindPhoneCode("wechat-phone-code", "token");
   await api.getRequirement(7, "token");
   await api.updateInquiry(7, { state: "submitted" }, "token");
   await api.supplementInquiry(7, { material: "304" }, "token");
   await api.saveSubscriptions(["quote_ready", "production"], "token");
   assert.deepEqual(calls.map(({ url, method, data }) => ({ url, method, data })), [
     { url: "https://api.example.com/api/customer/phone-binding", method: "POST", data: { phone: "13812345678", verificationProof: "mock:13812345678" } },
+    { url: "https://api.example.com/api/customer/phone-binding", method: "POST", data: { phoneCode: "wechat-phone-code" } },
     { url: "https://api.example.com/api/customer/inquiries/7", method: "GET", data: undefined },
     { url: "https://api.example.com/api/customer/inquiries/7", method: "POST", data: { state: "submitted" } },
     { url: "https://api.example.com/api/customer/inquiries/7/supplements", method: "POST", data: { material: "304" } },

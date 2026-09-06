@@ -72,6 +72,22 @@ function isAdmin(request, token) {
   return token && request.headers.authorization === `Bearer ${token}`;
 }
 
+function safeEqual(left, right) {
+  const a = Buffer.from(String(left || ""));
+  const b = Buffer.from(String(right || ""));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function validIntegrationRequest(request, rawBody, secret, now) {
+  if (!secret) return false;
+  const timestamp = String(request.headers["x-integration-timestamp"] || "");
+  const nonce = String(request.headers["x-integration-nonce"] || "");
+  const signature = String(request.headers["x-integration-signature"] || "");
+  if (!/^\d{13}$/.test(timestamp) || !nonce || Math.abs(now().getTime() - Number(timestamp)) > 300000) return false;
+  const expected = crypto.createHmac("sha256", secret).update(`${timestamp}.${nonce}.${rawBody}`).digest("hex");
+  return safeEqual(signature, expected);
+}
+
 function serveStatic(request, response, pathname) {
   const requested = pathname === "/" ? "index.html" : pathname.slice(1);
   const isImage = /^assets\/images\/[a-z0-9-]+\.(jpg|jpeg|png|webp)$/.test(requested);
@@ -128,6 +144,51 @@ function createApplication(options = {}) {
   const notify = options.notify;
   const enableWechatMock = options.enableWechatMock === true || process.env.ENABLE_WECHAT_MOCK === "1";
   const enablePhoneMock = options.enablePhoneMock === true || process.env.ENABLE_PHONE_MOCK === "1";
+  const wechatAppId = String(options.wechatAppId || process.env.WECHAT_APP_ID || "");
+  const wechatAppSecret = String(options.wechatAppSecret || process.env.WECHAT_APP_SECRET || "");
+  let wechatAccessToken = { value: "", expiresAt: 0 };
+  const exchangeWechatCode = options.exchangeWechatCode || (async (code) => {
+    if (!wechatAppId || !wechatAppSecret) throw Object.assign(new Error("未配置微信验证提供商"), { status: 501 });
+    const query = new URLSearchParams({ appid: wechatAppId, secret: wechatAppSecret, js_code: code, grant_type: "authorization_code" });
+    const response = await fetch(`https://api.weixin.qq.com/sns/jscode2session?${query}`);
+    const result = await response.json();
+    if (!response.ok || !result.openid) throw Object.assign(new Error(result.errmsg || "微信登录失败"), { status: 502 });
+    return result.openid;
+  });
+  const exchangePhoneCode = options.exchangePhoneCode || (async (code) => {
+    if (!wechatAppId || !wechatAppSecret) throw Object.assign(new Error("未配置手机号验证提供商"), { status: 501 });
+    if (!wechatAccessToken.value || wechatAccessToken.expiresAt <= Date.now()) {
+      const query = new URLSearchParams({ grant_type: "client_credential", appid: wechatAppId, secret: wechatAppSecret });
+      const response = await fetch(`https://api.weixin.qq.com/cgi-bin/token?${query}`);
+      const result = await response.json();
+      if (!response.ok || !result.access_token) throw Object.assign(new Error(result.errmsg || "微信访问令牌获取失败"), { status: 502 });
+      wechatAccessToken = { value: result.access_token, expiresAt: Date.now() + Math.max(60, Number(result.expires_in || 7200) - 300) * 1000 };
+    }
+    const response = await fetch(`https://api.weixin.qq.com/wxa/business/getuserphonenumber?access_token=${encodeURIComponent(wechatAccessToken.value)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
+    const result = await response.json();
+    const phone = result.phone_info?.purePhoneNumber;
+    if (!response.ok || !phone) throw Object.assign(new Error(result.errmsg || "手机号授权失败"), { status: 502 });
+    return phone;
+  });
+  const boboWebhookSecret = options.boboWebhookSecret || process.env.BOBO_INTEGRATION_SECRET || "";
+  const boboBaseUrl = String(options.boboBaseUrl || process.env.BOBO_BASE_URL || "").replace(/\/$/, "");
+  const wecomWebhookUrl = String(options.wecomWebhookUrl || process.env.WECOM_WEBHOOK_URL || "");
+  const alert = options.alert || (async (content) => {
+    if (!wecomWebhookUrl) return;
+    const response = await fetch(wecomWebhookUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ msgtype: "text", text: { content } }) });
+    if (!response.ok) throw new Error(`企业微信告警返回 ${response.status}`);
+  });
+  const boboCreate = options.boboCreate || (async (payload) => {
+    if (!boboBaseUrl || !boboWebhookSecret) throw new Error("波波工单集成未配置");
+    const body = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const nonce = crypto.randomUUID();
+    const signature = crypto.createHmac("sha256", boboWebhookSecret).update(`${timestamp}.${nonce}.${body}`).digest("hex");
+    const response = await fetch(`${boboBaseUrl}/api/external/work-orders`, { method: "POST", headers: { "content-type": "application/json", "x-integration-timestamp": timestamp, "x-integration-nonce": nonce, "x-integration-signature": signature }, body });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || result.message || `波波接口返回 ${response.status}`);
+    return result;
+  });
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   fs.mkdirSync(uploadDir, { recursive: true });
   const db = openDatabase(dbPath);
@@ -185,6 +246,33 @@ function createApplication(options = {}) {
     return deliverNotification(Number(result.lastInsertRowid));
   }
 
+  async function processBoboJobs() {
+    const jobs = db.prepare(`SELECT bobo_sync_jobs.*, orders.order_number, inquiries.contact_name, inquiries.phone, inquiries.quantity, inquiries.expected_date, inquiries.description, inquiries.material
+      FROM bobo_sync_jobs JOIN orders ON orders.id = bobo_sync_jobs.order_id JOIN inquiries ON inquiries.id = orders.inquiry_id
+      WHERE bobo_sync_jobs.status IN ('pending', 'retrying') AND bobo_sync_jobs.next_attempt_at <= ? ORDER BY bobo_sync_jobs.id LIMIT 10`).all(now().toISOString());
+    for (const job of jobs) {
+      try {
+        const result = await boboCreate({ externalOrderNumber: job.order_number, customer: job.contact_name, phone: job.phone, quantity: job.quantity, expectedDate: job.expected_date, description: job.description, material: job.material });
+        const timestamp = now().toISOString();
+        db.prepare("UPDATE orders SET bobo_sync_status = 'synced', bobo_order_id = ?, bobo_work_order_id = ? WHERE id = ?").run(String(result.orderId || ""), String(result.workOrderId || ""), job.order_id);
+        db.prepare("UPDATE bobo_sync_jobs SET status = 'synced', attempts = attempts + 1, last_error = '', updated_at = ? WHERE id = ?").run(timestamp, job.id);
+        audit("system", "bobo_order_synced", "order", job.order_id, String(result.workOrderId || ""));
+      } catch (error) {
+        const attempts = Number(job.attempts) + 1;
+        const delayMinutes = Math.min(60, 2 ** Math.min(attempts, 5));
+        const nextAttempt = new Date(now().getTime() + delayMinutes * 60000).toISOString();
+        const message = error instanceof Error ? error.message.slice(0, 500) : "波波同步失败";
+        db.prepare("UPDATE bobo_sync_jobs SET status = 'retrying', attempts = ?, last_error = ?, next_attempt_at = ?, updated_at = ? WHERE id = ?").run(attempts, message, nextAttempt, now().toISOString(), job.id);
+        db.prepare("UPDATE orders SET bobo_sync_status = 'retrying' WHERE id = ?").run(job.order_id);
+        if (attempts === 5) {
+          db.prepare("INSERT INTO admin_todos (type, entity_type, entity_id, detail, created_at) VALUES ('bobo_sync_failed', 'order', ?, ?, ?)").run(job.order_id, message, now().toISOString());
+          try { await alert(`未来机械订单 ${job.order_number} 同步波波工单连续失败 5 次：${message}`); } catch (alertError) { audit("system", "wecom_alert_failed", "order", job.order_id, alertError.message); }
+        }
+      }
+    }
+    return jobs.length;
+  }
+
   function inquiryView(row) {
     const created = new Date(row.created_at);
     const claimed = row.claimed_at ? new Date(row.claimed_at) : null;
@@ -240,15 +328,54 @@ function createApplication(options = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/integrations/bobo/health") {
-      return sendJson(response, 200, { enabled: false, statusMapping: { production: "production", quality: "quality", ready: "ready", completed: "completed" } });
+      return sendJson(response, 200, { enabled: Boolean(boboWebhookSecret), statusMapping: { production: "production", quality: "quality", ready: "ready", shipped: "shipped", completed: "completed" } });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/integrations/bobo/events") {
+      const rawBody = (await readBody(request)).toString("utf8");
+      if (!validIntegrationRequest(request, rawBody, boboWebhookSecret, now)) return sendJson(response, 401, { message: "集成签名无效" });
+      const nonce = String(request.headers["x-integration-nonce"]);
+      db.prepare("DELETE FROM integration_nonces WHERE received_at < ?").run(new Date(now().getTime() - 24 * 60 * 60 * 1000).toISOString());
+      try {
+        db.prepare("INSERT INTO integration_nonces (nonce, received_at) VALUES (?, ?)").run(nonce, now().toISOString());
+      } catch {
+        return sendJson(response, 409, { message: "集成请求已重放" });
+      }
+      let event;
+      try { event = JSON.parse(rawBody); } catch { return sendJson(response, 400, { message: "请求格式错误" }); }
+      if (!event.eventId) return sendJson(response, 422, { message: "事件ID必填" });
+      if (db.prepare("SELECT event_id FROM bobo_webhook_events WHERE event_id = ?").get(String(event.eventId))) return sendJson(response, 200, { duplicate: true });
+      const order = db.prepare("SELECT * FROM orders WHERE order_number = ?").get(String(event.externalOrderNumber || ""));
+      if (!order) return sendJson(response, 404, { message: "订单不存在" });
+      const sequence = Number(event.sequence || 0);
+      if (!Number.isSafeInteger(sequence) || sequence <= Number(order.bobo_last_sequence || 0)) return sendJson(response, 409, { message: "事件序号已过期" });
+      const process = event.process || {};
+      if (process.id && process.name && process.status) {
+        db.prepare(`INSERT INTO public_processes (order_id, process_id, sequence, name, status, started_at, completed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(order_id, process_id) DO UPDATE SET sequence = excluded.sequence, name = excluded.name, status = excluded.status, started_at = excluded.started_at, completed_at = excluded.completed_at`)
+          .run(order.id, String(process.id), Number(process.sequence || sequence), String(process.name).slice(0, 60), String(process.status).slice(0, 20), String(process.startedAt || ""), String(process.completedAt || ""));
+      }
+      const statusByType = { "quality.ready": "quality", "shipment.ready": "ready", "shipment.shipped": "shipped", "delivery.completed": "completed" };
+      db.prepare("UPDATE orders SET status = ?, bobo_work_order_id = COALESCE(NULLIF(?, ''), bobo_work_order_id), bobo_last_sequence = ? WHERE id = ?")
+        .run(statusByType[event.type] || "production", String(event.workOrderId || ""), sequence, order.id);
+      db.prepare("INSERT INTO bobo_webhook_events (event_id, order_id, sequence, received_at) VALUES (?, ?, ?, ?)")
+        .run(String(event.eventId), order.id, sequence, now().toISOString());
+      audit("bobo", "webhook_event", "order", order.id, `${event.type}:${event.eventId}`);
+      return sendJson(response, 202, { accepted: true });
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/wechat/login") {
       const input = await readJson(request);
       const code = String(input.code || "");
-      if (!code.startsWith("mock:") || !code.slice(5).trim()) return sendJson(response, 501, { message: "未配置微信验证提供商" });
-      if (!enableWechatMock) return sendJson(response, 501, { message: "未配置微信验证提供商，mock 登录未启用" });
-      const openid = code.slice(5).trim();
+      if (!code) return sendJson(response, 422, { message: "微信登录凭证必填" });
+      let openid;
+      if (code.startsWith("mock:")) {
+        if (!enableWechatMock || !code.slice(5).trim()) return sendJson(response, 501, { message: "未配置微信验证提供商，mock 登录未启用" });
+        openid = code.slice(5).trim();
+      } else {
+        openid = await exchangeWechatCode(code);
+      }
       let identity = db.prepare("SELECT customer_id FROM wechat_identities WHERE openid = ?").get(openid);
       let customer;
       const timestamp = now().toISOString();
@@ -271,10 +398,12 @@ function createApplication(options = {}) {
       const customer = sessionCustomer(request);
       if (!customer) return sendJson(response, 401, { message: "客户登录已失效" });
       const input = await readJson(request);
-      const phone = normalizePhone(input.phone);
+      let verifiedPhone = "";
+      if (input.phoneCode) verifiedPhone = await exchangePhoneCode(String(input.phoneCode));
+      else if (enablePhoneMock && input.verificationProof === `mock:${normalizePhone(input.phone)}`) verifiedPhone = input.phone;
+      else return sendJson(response, 422, { field: "phoneCode", message: "手机号授权凭证无效" });
+      const phone = normalizePhone(verifiedPhone);
       if (!/^1\d{10}$/.test(phone)) return sendJson(response, 422, { field: "phone", message: "请输入正确的11位手机号" });
-      if (!enablePhoneMock) return sendJson(response, 501, { message: "未配置手机号验证提供商" });
-      if (input.verificationProof !== `mock:${phone}`) return sendJson(response, 422, { field: "verificationProof", message: "手机号验证凭证无效" });
       if (customer.phone && customer.phone !== phone) return sendJson(response, 409, { message: "已绑定手机号不可更换" });
       const occupied = db.prepare("SELECT id FROM customers WHERE phone = ? AND id != ?").get(phone, customer.id);
       if (occupied) return sendJson(response, 409, { message: "该手机号已绑定其他客户" });
@@ -475,7 +604,8 @@ function createApplication(options = {}) {
       const order = db.prepare("SELECT * FROM orders WHERE id = ? AND (customer_id = ? OR phone = ?)").get(Number(customerMatch[1]), customer.id, customer.phone);
       if (!order) return sendJson(response, 404, { message: "订单不存在" });
       const events = db.prepare("SELECT status, title, occurred_at AS occurredAt FROM order_events WHERE order_id = ? ORDER BY id").all(order.id);
-      return sendJson(response, 200, publicOrder({ orderNumber: order.order_number, contactName: order.contact_name, status: order.status, events }));
+      const processes = db.prepare("SELECT process_id AS id, sequence, name, status, started_at AS startedAt, completed_at AS completedAt FROM public_processes WHERE order_id = ? ORDER BY sequence, process_id").all(order.id);
+      return sendJson(response, 200, { ...publicOrder({ orderNumber: order.order_number, contactName: order.contact_name, status: order.status, events }), processes });
     }
 
     if (request.method === "POST" && url.pathname === "/api/inquiries") {
@@ -531,7 +661,9 @@ function createApplication(options = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/orders") {
-      const rows = db.prepare("SELECT id, order_number, contact_name, phone, status, payment_status, created_at FROM orders ORDER BY id DESC").all();
+      const rows = db.prepare(`SELECT orders.id, orders.order_number, orders.contact_name, orders.phone, orders.status, orders.payment_status, orders.bobo_sync_status,
+        orders.bobo_order_id, orders.bobo_work_order_id, orders.created_at, bobo_sync_jobs.last_error, bobo_sync_jobs.updated_at AS bobo_synced_at
+        FROM orders LEFT JOIN bobo_sync_jobs ON bobo_sync_jobs.order_id = orders.id ORDER BY orders.id DESC`).all();
       return sendJson(response, 200, rows.map((row) => ({
         id: row.id,
         orderNumber: row.order_number,
@@ -539,6 +671,11 @@ function createApplication(options = {}) {
         phone: row.phone,
         status: row.status,
         paymentStatus: row.payment_status,
+        boboSyncStatus: row.bobo_sync_status,
+        boboOrderId: row.bobo_order_id,
+        boboWorkOrderId: row.bobo_work_order_id,
+        boboLastError: row.last_error || "",
+        boboSyncedAt: row.bobo_synced_at || "",
         createdAt: row.created_at
       })));
     }
@@ -619,6 +756,8 @@ function createApplication(options = {}) {
       const result = db.prepare("INSERT INTO orders (inquiry_id, order_number, contact_name, phone, status, payment_status, total_amount, customer_id, created_at) VALUES (?, ?, ?, ?, 'paid', 'paid', ?, ?, ?)")
         .run(inquiryId, orderNumber, inquiry.contact_name, inquiry.phone, quote.amount, customer ? customer.id : null, createdAt);
       const orderId = Number(result.lastInsertRowid);
+      db.prepare("INSERT INTO bobo_sync_jobs (order_id, status, next_attempt_at, created_at, updated_at) VALUES (?, 'pending', ?, ?, ?)")
+        .run(orderId, createdAt, createdAt, createdAt);
       db.prepare("INSERT INTO order_events (order_id, status, title, occurred_at) VALUES (?, 'paid', '已确认全额付款', ?)").run(orderId, createdAt);
       db.prepare("UPDATE inquiries SET status = 'ordered' WHERE id = ?").run(inquiryId);
       audit(input.operator || "财务", "confirm_payment", "order", orderId);
@@ -645,6 +784,16 @@ function createApplication(options = {}) {
       audit(input.operator || "客服", "add_public_event", "order", orderId, input.status);
       if (order.customer_id) await queueNotification(order.customer_id, "order_status_changed", "order", orderId, { orderNumber: order.order_number, status: input.status });
       return sendJson(response, 201, { status: input.status, title: input.title, occurredAt });
+    }
+
+    match = url.pathname.match(/^\/api\/admin\/orders\/(\d+)\/bobo-retry$/);
+    if (request.method === "POST" && match) {
+      const orderId = Number(match[1]);
+      const timestamp = now().toISOString();
+      const result = db.prepare("UPDATE bobo_sync_jobs SET status = 'pending', next_attempt_at = ?, updated_at = ? WHERE order_id = ?").run(timestamp, timestamp, orderId);
+      if (!result.changes) return sendJson(response, 404, { message: "同步任务不存在" });
+      db.prepare("UPDATE orders SET bobo_sync_status = 'pending' WHERE id = ?").run(orderId);
+      return sendJson(response, 202, { queued: true });
     }
 
     match = url.pathname.match(/^\/api\/admin\/notification-jobs\/(\d+)\/retry$/);
@@ -683,7 +832,7 @@ function createApplication(options = {}) {
     }
   });
 
-  return { server, close: () => db.close() };
+  return { server, database: db, processBoboJobs, close: () => db.close() };
 }
 
 if (require.main === module) {
@@ -691,6 +840,7 @@ if (require.main === module) {
   const host = process.env.HOST || "127.0.0.1";
   const port = Number(process.env.PORT || 8080);
   app.server.listen(port, host, () => console.log(`Future Machinery website: http://${host}:${port}`));
+  if (process.env.BOBO_BASE_URL && process.env.BOBO_INTEGRATION_SECRET) setInterval(() => app.processBoboJobs().catch((error) => console.error("bobo sync failed", error)), 15000).unref();
 }
 
 module.exports = { createApplication };

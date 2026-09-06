@@ -141,11 +141,45 @@ function openDatabase(file) {
       size INTEGER NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS bobo_sync_jobs (
+      id INTEGER PRIMARY KEY,
+      order_id INTEGER NOT NULL UNIQUE REFERENCES orders(id),
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT '',
+      next_attempt_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS bobo_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id),
+      sequence INTEGER NOT NULL,
+      received_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS integration_nonces (
+      nonce TEXT PRIMARY KEY,
+      received_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS public_processes (
+      order_id INTEGER NOT NULL REFERENCES orders(id),
+      process_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL DEFAULT '',
+      completed_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (order_id, process_id)
+    );
   `);
   addColumn(db, "inquiries", "source", "TEXT NOT NULL DEFAULT 'web'");
   addColumn(db, "inquiries", "customer_id", "INTEGER REFERENCES customers(id)");
   addColumn(db, "inquiries", "lifecycle_state", "TEXT NOT NULL DEFAULT 'submitted'");
   addColumn(db, "orders", "customer_id", "INTEGER REFERENCES customers(id)");
+  addColumn(db, "orders", "bobo_order_id", "TEXT NOT NULL DEFAULT ''");
+  addColumn(db, "orders", "bobo_work_order_id", "TEXT NOT NULL DEFAULT ''");
+  addColumn(db, "orders", "bobo_sync_status", "TEXT NOT NULL DEFAULT 'pending'");
+  addColumn(db, "orders", "bobo_last_sequence", "INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 

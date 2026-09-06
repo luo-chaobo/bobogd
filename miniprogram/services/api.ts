@@ -40,6 +40,7 @@ export function createApiClient(options: ApiClientOptions) {
   return {
     login: (data: { code: string; mock: boolean }) => call("/api/auth/wechat/login", "POST", data),
     bindPhone: (phone: string, verificationProof: string, token: string) => call("/api/customer/phone-binding", "POST", { phone, verificationProof }, token),
+    bindPhoneCode: (phoneCode: string, token: string) => call("/api/customer/phone-binding", "POST", { phoneCode }, token),
     createInquiry: (data: unknown, token: string) => call("/api/customer/inquiries", "POST", data, token),
     getRequirement: (id: number, token: string) => call(`/api/customer/inquiries/${id}`, "GET", undefined, token),
     updateInquiry: (id: number, data: unknown, token: string) => call(`/api/customer/inquiries/${id}`, "POST", data, token),

@@ -1,65 +1,42 @@
-# 波波工单一期接口边界
+# 波波工单一期接口
 
-已确认现有系统：
+双方仅通过服务端 HTTPS 联动，不使用看板 `viewerToken`。环境变量 `BOBO_INTEGRATION_SECRET` 必须使用同一份高强度随机密钥，并仅存放在服务器环境文件中。
 
-- 后台基础地址：`https://bobogd.wljixie.com/`
-- 移动看板路径：`https://bobogd.wljixie.com/tv.html?mobile=1`
+## 签名
 
-看板访问令牌属于敏感凭据，不写入官网代码、数据库或文档。正式联调使用独立服务端令牌，不复用浏览器 `viewerToken`。
-
-## 建议的波波工单接口
-
-波波工单服务端确认接口后，再启用以下适配器；一期官网不调用这些地址。
-
-### 鉴权
+每次请求携带：
 
 ```http
-Authorization: Bearer <BOBO_SERVICE_TOKEN>
 Content-Type: application/json
+X-Integration-Timestamp: <13位Unix毫秒>
+X-Integration-Nonce: <随机UUID>
+X-Integration-Signature: <hex HMAC-SHA256>
 ```
 
-### 创建工单
+签名原文为 `timestamp + "." + nonce + "." + 原始请求体`。接收端允许五分钟时钟偏差，持久化保存 nonce 防重放。
+
+## 未来机械创建波波工单
 
 ```http
 POST /api/external/work-orders
 ```
 
-```json
-{
-  "source": "wljixie-website",
-  "externalOrderNumber": "WL-20260829-0001",
-  "customer": "王先生",
-  "phone": "13812345678",
-  "quantity": 2,
-  "expectedDate": "2026-09-10",
-  "description": "制作设备不锈钢防护罩",
-  "material": "304不锈钢"
-}
+请求包含 `externalOrderNumber`、`customer`、`phone`、`quantity`、`expectedDate`、`description` 和 `material`。`externalOrderNumber` 是幂等键；首次响应 `201`，重复请求响应 `200`，均返回稳定的 `orderId` 与 `workOrderId`。创建的工单为“待排产”，不自动指定工序和人员。
+
+## 波波回传公开进度
+
+波波配置：
+
+```text
+FUTURE_WEBHOOK_URL=https://order.wljixie.com/api/integrations/bobo/events
+BOBO_INTEGRATION_SECRET=<共享密钥>
 ```
 
-波波工单返回稳定的 `workOrderId`。官网保存该ID用于幂等重试，不把内部工序与成本公开给客户。
+请求包含 `eventId`、`sequence`、`workOrderId`、`externalOrderNumber`、`type`、`occurredAt`、`status` 和可选的 `process`。公开事件包括 `process.updated`、`quality.ready`、`shipment.ready`、`shipment.shipped` 与 `delivery.completed`。未来机械按 `eventId` 去重、按 `sequence` 拒绝旧事件，只保存工序 ID、序号、名称、状态和起止时间。
 
-### 同步公开节点
+## 联调原则
 
-```http
-POST /api/integrations/bobo/events
-```
-
-```json
-{
-  "workOrderId": "bobo-id",
-  "externalOrderNumber": "WL-20260829-0001",
-  "status": "production",
-  "title": "已进入生产",
-  "occurredAt": "2026-08-29T10:00:00.000Z",
-  "signature": "hmac-sha256"
-}
-```
-
-只接受白名单状态：`production`、`quality`、`ready`、`completed`。请求使用时间戳、随机数和HMAC签名防止伪造与重放。
-
-## 启用条件
-
-- 波波工单提供稳定的服务端API、鉴权方式和测试环境。
-- 双方确认字段、状态映射、幂等键、超时与重试策略。
-- 联调验证失败时不阻断官网询价、付款确认或人工更新进度。
+- 未来机械付款确认先落本地订单和同步任务；波波离线不阻塞付款确认。
+- 双方失败任务按指数退避重试，应用重启后继续处理。
+- 正式联调先使用 Hosts 或测试域名，不修改 `bobogd.wljixie.com`。
+- 客户接口不得返回员工、工资、工时、设备、成本、内部备注、异常责任人或质检处置细节。

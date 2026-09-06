@@ -2,7 +2,7 @@ import { buildLoginRequest } from "../../services/contracts";
 
 const app = getApp<any>();
 Page({
-  data: { error: "", phone: "" },
+  data: { error: "" },
   async login() {
     try {
       const login = await wx.login();
@@ -15,12 +15,12 @@ Page({
       wx.switchTab({ url: "/pages/home/index" });
     } catch (error: any) { this.setData({ error: error.message || "登录未完成，请稍后重试" }); }
   },
-  phoneInput(event: any) { this.setData({ phone: event.detail.value }); },
-  async bindPhone() {
+  async bindPhone(event: any) {
     try {
-      const environment = wx.getAccountInfoSync().miniProgram.envVersion;
-      if (environment !== "develop") throw new Error("正式手机号授权尚待微信主体认证后接入");
-      const result = await app.globalData.api.bindPhone(this.data.phone, `mock:${this.data.phone}`, app.globalData.sessionToken);
+      if (!app.globalData.sessionToken) throw new Error("请先完成微信登录");
+      const phoneCode = String(event.detail?.code || "");
+      if (!phoneCode) throw new Error("未取得手机号授权");
+      const result = await app.globalData.api.bindPhoneCode(phoneCode, app.globalData.sessionToken);
       app.globalData.user = result.customer;
       wx.setStorageSync("user", result.customer);
       wx.showToast({ title: "手机号已绑定", icon: "success" });

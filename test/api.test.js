@@ -290,7 +290,7 @@ test("keeps failed notifications retryable, exposes admin todo, and forbids unpa
     const dictionary = await jsonRequest(`${baseUrl}/api/status-dictionary`);
     assert.equal(dictionary.body.paymentRule.productionRequiresConfirmedPayment, true);
     const bobo = await jsonRequest(`${baseUrl}/api/integrations/bobo/health`);
-    assert.deepEqual(bobo.body, { enabled: false, statusMapping: { production: "production", quality: "quality", ready: "ready", completed: "completed" } });
+    assert.deepEqual(bobo.body, { enabled: false, statusMapping: { production: "production", quality: "quality", ready: "ready", shipped: "shipped", completed: "completed" } });
     assert.ok(created.body.id);
   } finally {
     await new Promise((resolve) => app.server.close(resolve));

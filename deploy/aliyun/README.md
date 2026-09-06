@@ -19,6 +19,10 @@ ADMIN_TOKEN=<至少32位随机字符串>
 DATABASE_PATH=/srv/wljixie/website/data/website.sqlite
 UPLOAD_DIR=/srv/wljixie/website/private/uploads
 BOBO_BASE_URL=https://bobogd.wljixie.com
+BOBO_INTEGRATION_SECRET=<双方共享的高强度随机密钥>
+WECHAT_APP_ID=<未来机械小程序AppID>
+WECHAT_APP_SECRET=<未来机械小程序Secret>
+WECOM_WEBHOOK_URL=<企业微信机器人Webhook>
 ```
 
 权限设置为仅服务管理员可读：

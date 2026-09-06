@@ -41,11 +41,17 @@ function orderCard(order) {
     element("b", order.orderNumber),
     element("h3", order.contactName),
     element("p", order.phone),
-    element("p", `当前状态：${order.status}`)
+    element("p", `当前状态：${order.status}`),
+    element("p", `波波同步：${order.bobo_sync_status || "pending"}`)
   );
   const button = element("button", "更新进度", "button button-small");
   button.dataset.orderId = String(order.id);
   article.append(button);
+  if (order.bobo_sync_status !== "synced") {
+    const retry = element("button", "重试波波同步", "button button-small button-ghost");
+    retry.dataset.boboRetry = String(order.id);
+    article.append(retry);
+  }
   return article;
 }
 
@@ -68,7 +74,7 @@ async function loadInquiries() {
 document.getElementById("load-admin").addEventListener("click", loadInquiries);
 list.addEventListener("click", (event) => { const button = event.target.closest("[data-id]"); if (!button) return; form.elements.inquiryId.value = button.dataset.id; document.getElementById("workflow-title").textContent = `处理 ${button.dataset.number}`; result.textContent = ""; dialog.showModal(); });
 form.querySelector("[data-close]").addEventListener("click", () => dialog.close());
-orderList.addEventListener("click", (event) => { const button = event.target.closest("[data-order-id]"); if (!button) return; eventForm.elements.orderId.value = button.dataset.orderId; document.getElementById("event-result").textContent = ""; eventDialog.showModal(); });
+orderList.addEventListener("click", async (event) => { const retry = event.target.closest("[data-bobo-retry]"); if (retry) { try { await api(`/api/admin/orders/${retry.dataset.boboRetry}/bobo-retry`, { method: "POST", body: "{}" }); await loadInquiries(); } catch (error) { summary.replaceChildren(element("span", error.message)); } return; } const button = event.target.closest("[data-order-id]"); if (!button) return; eventForm.elements.orderId.value = button.dataset.orderId; document.getElementById("event-result").textContent = ""; eventDialog.showModal(); });
 eventForm.querySelector("[data-event-close]").addEventListener("click", () => eventDialog.close());
 eventForm.addEventListener("submit", async (event) => { event.preventDefault(); const data = new FormData(eventForm); try { await api(`/api/admin/orders/${data.get("orderId")}/events`, { method: "POST", body: JSON.stringify({ operator: data.get("operator"), status: data.get("status"), title: data.get("title") }) }); document.getElementById("event-result").textContent = "进度已发布"; await loadInquiries(); } catch (error) { document.getElementById("event-result").textContent = error.message; } });
 form.addEventListener("click", async (event) => {
