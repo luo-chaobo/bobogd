@@ -10,6 +10,16 @@
 - 14个独立企业官网页面、独立快速下单平台，以及可由微信开发者工具导入的原生 TypeScript 小程序。
 - 25秒真实工厂素材宣传片，支持移动端分段加载和拖动播放。
 
+## 产品与协作文档
+
+- [仓库交接](Handoff.md)：本仓库范围、已验证版本、阻塞与下一步。
+- [系统目录](docs/product/system-catalog.md)：各产品与基础设施的职责、依赖和状态。
+- [架构索引](docs/architecture/README.md)：仓库内架构资料的入口。
+- [数据分析访问契约](docs/data/analytics-access.md)：一期脱敏导出和二期数据访问边界。
+- [API 文档](docs/bobo-api.md)：与波波工单的服务端 HTTPS 接口边界。
+- [部署文档](docs/order-subdomain.md)：`order.wljixie.com` 的上线映射约束。
+- [Obsidian 产品主档](D:\Obsidian\未来机械\未来机械)：跨系统产品、路线图和协作记录；Git 是本仓库技术事实主档。
+
 ## 本地启动
 
 需要 Node.js 24 或更新版本，不需要安装第三方包。
