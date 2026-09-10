@@ -38,6 +38,9 @@ const state = {
   dashboardFinishedFrom: isoDate(-6),
   dashboardFinishedTo: isoDate(0),
   historyDetailId: "",
+  historyOrderId: "",
+  repeatOrderMode: false,
+  repeatOrderConfirmOpen: false,
   openFulfillmentOrderId: "",
   customerFeedback: { customerId: "", workOrderId: "" },
   reportsFrom: monthStartDate(),
@@ -828,7 +831,7 @@ function historyPage(data) {
           <tbody>
             ${workOrders.length ? workOrders.map((item) => `
               <tr>
-                <td>${escapeHtml(item.workNo)}</td>
+                <td><button class="history-order-link" type="button" data-history-order="${item.id}">${escapeHtml(item.workNo)}</button></td>
                 <td>${escapeHtml(item.customerName)}<br><span class="muted">${escapeHtml(item.productName)}</span><br><span class="muted">${escapeHtml(item.planQty)} ${quantityUnit(item.quantityUnit)}</span></td>
                 <td>${item.weightKg === null || item.weightKg === undefined ? "-" : `${escapeHtml(item.weightKg)} KG`}</td>
                 <td>${escapeHtml(formatDateTime(item.createdAt))}</td>
@@ -844,7 +847,35 @@ function historyPage(data) {
       </div>
     </section>
     ${historyDetailModal()}
+    ${historyOrderModal(data)}
   `;
+}
+
+function historyOrderModal(data) {
+  const item = state.historyResults.workOrders.find((entry) => entry.id === state.historyOrderId);
+  if (!item) return "";
+  const repeatMode = state.repeatOrderMode;
+  const canRepeat = item.productionStatus === "已完成" && userRoles(state.user).some(canManageRole);
+  const editable = repeatMode ? "" : "readonly";
+  const disabled = repeatMode ? "" : "disabled";
+  const routes = (item.routes || []).filter((route) => route.routeType !== "rework").sort((a, b) => a.sequence - b.sequence);
+  return `<div class="dialog-backdrop" data-action="closeHistoryOrder"><section class="dialog history-order-dialog ${repeatMode ? "history-order-editing" : "history-order-readonly"}" onclick="event.stopPropagation()">
+    <div class="topbar"><div><h3>${repeatMode ? "创建返单" : "订单详情"}</h3><p class="muted">原工单：${escapeHtml(item.workNo)} / 原订单：${escapeHtml(item.orderNo)} / 状态：${escapeHtml(item.productionStatus)}${item.completedAt ? ` / 完工：${escapeHtml(formatDateTime(item.completedAt))}` : ""}</p></div><button class="btn secondary compact" data-action="closeHistoryOrder">关闭</button></div>
+    <div class="form-grid history-order-fields" ${repeatMode ? "" : 'inert aria-disabled="true"'}>
+      <label class="field"><span>订单号</span><input id="repeatOrderNo" value="${escapeHtml(item.orderNo)}" ${editable}></label>
+      <label class="field locked-field"><span>客户</span><input value="${escapeHtml(item.customerName)}" readonly></label>
+      <label class="field locked-field"><span>产品名称</span><input value="${escapeHtml(item.productName)}" readonly></label>
+      <label class="field locked-field"><span>激光编号</span><input value="${escapeHtml(item.drawingNo || "")}" readonly></label>
+      <label class="field"><span>数量</span><div class="quantity-control"><input id="repeatQuantity" type="number" min="1" step="1" value="${escapeHtml(item.planQty)}" ${editable}><input class="locked-control" value="${escapeHtml(quantityUnit(item.quantityUnit))}" readonly></div></label>
+      <label class="field"><span>交期</span><input id="repeatDueDate" type="date" value="${escapeHtml(item.dueDate || "")}" ${editable}></label>
+      <label class="field"><span>优先级</span><select id="repeatPriority" ${disabled}><option ${item.priority === "普通" ? "selected" : ""}>普通</option><option ${item.priority === "急单" ? "selected" : ""}>急单</option></select></label>
+      <label class="field"><span>重量（KG）</span><input id="repeatWeightKg" type="number" min="0" step="1" value="${escapeHtml(item.weightKg ?? "")}" ${editable}></label>
+      <div class="field wide locked-field"><span>工序路线</span><div class="history-route-list">${routes.map((route) => `<div class="history-route-item"><strong>${escapeHtml(route.sequence)}. ${escapeHtml(route.processName)}</strong>${tag(route.status)}<span>${escapeHtml(route.completedQty || 0)} / ${escapeHtml(route.planQty || item.planQty)} ${escapeHtml(quantityUnit(item.quantityUnit))}</span></div>`).join("") || `<span class="muted">无正式工序</span>`}</div></div>
+      <label class="field wide"><span>备注</span><textarea id="repeatNote" ${editable}>${escapeHtml(item.note || "")}</textarea></label>
+    </div>
+    <div class="history-order-attachments"><span class="attachment-field-title">图纸附件 ${attachmentGroupButton(item.drawings || [], `${item.workNo} ${item.productName}`)}</span></div>
+    <div class="actions"><button class="btn" data-action="saveRepeatOrder" ${repeatMode ? "" : "disabled"}>保存修改</button>${canRepeat && !repeatMode ? `<button class="btn secondary" data-action="enableRepeatOrder">返单</button>` : ""}</div>
+  </section>${state.repeatOrderConfirmOpen ? `<div class="repeat-confirm-backdrop" onclick="event.stopPropagation()"><section class="repeat-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="repeatConfirmTitle"><h3 id="repeatConfirmTitle">确认返单</h3><p>确认基于该工单创建返单？原订单不会被修改。</p><div class="actions"><button class="btn" data-action="confirmRepeatOrder">确定</button><button class="btn secondary" data-action="cancelRepeatOrder">取消</button></div></section></div>` : ""}</div>`;
 }
 
 function fulfillmentStatusControl(item, canManage) {
@@ -1512,6 +1543,14 @@ function bindEvents() {
       render();
     };
   });
+  document.querySelectorAll("[data-history-order]").forEach((btn) => {
+    btn.onclick = () => {
+      state.historyOrderId = btn.dataset.historyOrder;
+      state.repeatOrderMode = false;
+      state.repeatOrderConfirmOpen = false;
+      render();
+    };
+  });
   document.querySelectorAll("[data-remove-edit-drawing]").forEach((input) => {
     input.onchange = () => {
       state.editRemovedDrawingIds = [...document.querySelectorAll("[data-remove-edit-drawing]:checked")].map((item) => item.dataset.removeEditDrawing);
@@ -1521,7 +1560,7 @@ function bindEvents() {
     btn.onclick = () => deleteCustomer(btn.dataset.deleteCustomer);
   });
   document.querySelectorAll("[data-print-qr-sheet]").forEach((btn) => {
-    btn.onclick = () => window.open(`/qr-print.html?v=20260814-order-note&workOrderId=${encodeURIComponent(btn.dataset.printQrSheet)}`, "_blank");
+    btn.onclick = () => window.open(`/qr-print.html?v=20260906-customer-title&workOrderId=${encodeURIComponent(btn.dataset.printQrSheet)}`, "_blank");
   });
   document.querySelectorAll("[data-delete-user]").forEach((btn) => {
     btn.onclick = () => deleteUser(btn.dataset.deleteUser);
@@ -1744,6 +1783,14 @@ async function handleAction(action) {
     render();
   }
   if (action === "closeHistoryDetail") { state.historyDetailId = ""; render(); }
+  if (action === "closeHistoryOrder") { state.historyOrderId = ""; state.repeatOrderMode = false; state.repeatOrderConfirmOpen = false; render(); }
+  if (action === "enableRepeatOrder") {
+    state.repeatOrderConfirmOpen = true;
+    render();
+  }
+  if (action === "cancelRepeatOrder") { state.repeatOrderConfirmOpen = false; render(); }
+  if (action === "confirmRepeatOrder") { state.repeatOrderConfirmOpen = false; state.repeatOrderMode = true; render(); }
+  if (action === "saveRepeatOrder") await saveRepeatOrder();
   if (action === "openFinishedHistory") {
     state.view = "history";
     state.historyFilters = { dateType: "completedAt", from: state.dashboardFinishedFrom, to: state.dashboardFinishedTo, customerId: "", status: "" };
@@ -2028,6 +2075,36 @@ async function saveOrderEdit() {
     state.editRemovedDrawingIds = [];
     toast("订单已更新");
     await refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function saveRepeatOrder() {
+  const source = state.historyResults.workOrders.find((item) => item.id === state.historyOrderId);
+  if (!source || !state.repeatOrderMode) return;
+  const orderNo = el("repeatOrderNo").value.trim();
+  if (!orderNo) return toast("新订单号必填");
+  if (orderNo === source.orderNo) return toast("新订单号不能与原订单号相同");
+  try {
+    await api("/api/orders/repeat", {
+      method: "POST",
+      body: JSON.stringify({
+        sourceWorkOrderId: source.id,
+        orderNo,
+        quantity: el("repeatQuantity").value,
+        dueDate: el("repeatDueDate").value,
+        priority: el("repeatPriority").value,
+        weightKg: el("repeatWeightKg").value.trim(),
+        note: el("repeatNote").value,
+      }),
+    });
+    state.historyOrderId = "";
+    state.repeatOrderMode = false;
+    state.repeatOrderConfirmOpen = false;
+    toast("返单订单和工单已创建");
+    await refresh();
+    await searchHistory(true);
   } catch (error) {
     toast(error.message);
   }

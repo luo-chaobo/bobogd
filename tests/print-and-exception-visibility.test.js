@@ -6,7 +6,9 @@ const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const printPage = read("public/qr-print.html");
-assert.strictEqual(printPage.includes("客户：${esc(workOrder.customer?.name || \"\")}"), false);
+assert.ok(printPage.includes('const customerName = String(workOrder.customer?.name || "").trim()'));
+assert.ok(printPage.includes('${esc(workOrder.workNo)} ${esc(customerName || "客户未填写")}'));
+assert.ok(!printPage.includes("${esc(workOrder.workNo)} 工序二维码"));
 
 const appJson = JSON.parse(read("miniprogram/app.json"));
 assert.strictEqual(appJson.tabBar.custom, true);

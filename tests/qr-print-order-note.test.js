@@ -13,6 +13,8 @@ assert.ok(printSource.includes('orderNote || "无备注"'), "An empty note must 
 assert.ok(printSource.includes("noteSizeClass(orderNote)"), "The note must select a size class by content length");
 assert.ok(printSource.includes("white-space: pre-wrap"), "Manual line breaks must be preserved");
 assert.ok(printSource.includes("overflow-wrap: anywhere"), "Long text must wrap without clipping");
-assert.ok(appSource.includes("/qr-print.html?v=20260814-order-note&workOrderId="), "The print link must use the updated cache version");
+assert.ok(printSource.includes(".header-main"), "The title area must be allowed to shrink beside the order note");
+assert.ok(printSource.includes('customerName || "客户未填写"'), "A missing customer must have a stable fallback");
+assert.ok(appSource.includes("/qr-print.html?v=20260906-customer-title&workOrderId="), "The print link must use the updated cache version");
 
 console.log("qr-print-order-note: ok");

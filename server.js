@@ -873,6 +873,8 @@ function workOrderHistoryItems(db, filters, includeCustomerFeedbacks = false) {
         status: orderFulfillmentStatus(workOrder, order),
         productionStatus: workOrder.status,
         weightKg: order.weightKg ?? null,
+        priority: order.priority || "普通",
+        note: order.note || "",
         shippedAt: order.shippedAt || "",
         invoicedAt: order.invoicedAt || "",
         dueDate: order.dueDate || "",
@@ -1792,7 +1794,7 @@ function buildTvDashboard(db, showCustomer = false, includeDrawings = false) {
   const urgent = active.filter((w) => w.dueLevel === "urgent");
   const rushOrders = active.filter((w) => w.isRush);
   const waiting = db.routes.filter((r) => ["待开始", "暂停"].includes(r.status)).length;
-  const onTimeRate = orders.length ? Math.round(((orders.length - delayed.length) / orders.length) * 100) : 100;
+  const onTimeRate = active.length ? Math.round(((active.length - delayed.length) / active.length) * 100) : 100;
   const processLoad = buildProcessLoad(db, tvProcessNames);
   const statusDistribution = {
     active: db.routes.filter((r) => ["进行中"].includes(r.status)).length,
@@ -2370,6 +2372,124 @@ async function handleApi(req, res) {
       appendAudit(db, user, "process-status-update", "process", process.id, { name: process.name, active: process.active });
       await writeDb(db);
       return send(res, 200, { ok: true, process });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/orders/repeat") {
+      if (!canManage(user)) return send(res, 403, { error: "无权创建返单" });
+      const body = await parseBody(req);
+      const sourceWorkOrder = db.workOrders.find((item) => item.id === body.sourceWorkOrderId);
+      if (!sourceWorkOrder) return send(res, 404, { error: "原工单不存在" });
+      if (sourceWorkOrder.status !== "已完成") return send(res, 409, { error: "只有已完成工单可以返单" });
+      const sourceOrder = db.orders.find((item) => item.id === sourceWorkOrder.orderId);
+      if (!sourceOrder) return send(res, 404, { error: "原订单不存在" });
+      const customer = db.customers.find((item) => item.id === sourceOrder.customerId && item.active !== false);
+      if (!customer) return send(res, 409, { error: "原订单客户不存在或已停用" });
+
+      const orderNo = String(body.orderNo || "").trim();
+      const quantity = Number(body.quantity);
+      const dueDate = normalizeDate(body.dueDate);
+      const priority = String(body.priority || "").trim();
+      const weight = normalizeWeightKg(body.weightKg);
+      if (!orderNo) return send(res, 400, { error: "新订单号必填" });
+      if (orderNo === sourceOrder.orderNo) return send(res, 409, { error: "新订单号不能与原订单号相同" });
+      if (db.orders.some((item) => item.orderNo === orderNo)) return send(res, 409, { error: "订单号已存在" });
+      if (!Number.isInteger(quantity) || quantity < 1) return send(res, 400, { error: "数量必须为大于 0 的整数" });
+      if (!dueDate) return send(res, 400, { error: "交期格式请填写 YYYY/MM/DD" });
+      if (!["普通", "急单"].includes(priority)) return send(res, 400, { error: "优先级不正确" });
+      if (weight.error) return send(res, 400, { error: weight.error });
+
+      const sourceRoutes = db.routes
+        .filter((route) => route.workOrderId === sourceWorkOrder.id && route.routeType !== "rework")
+        .sort((a, b) => a.sequence - b.sequence);
+      if (!sourceRoutes.length) return send(res, 409, { error: "原工单没有可复制的正式工序" });
+      const processes = sourceRoutes.map((route) => db.processes.find((process) => process.id === route.processId));
+      if (processes.some((process) => !process || process.active === false)) return send(res, 409, { error: "原工单包含不存在或已停用的工序，请先处理工序配置" });
+
+      const orderId = id("o");
+      const workOrderId = id("w");
+      const createdAt = new Date().toISOString();
+      const order = {
+        id: orderId,
+        orderNo,
+        customerId: sourceOrder.customerId,
+        productName: sourceOrder.productName,
+        drawingNo: sourceOrder.drawingNo || "",
+        weightKg: weight.value,
+        quantity,
+        quantityUnit: normalizeQuantityUnit(sourceOrder.quantityUnit),
+        dueDate,
+        priority,
+        status: "未开始",
+        note: String(body.note || ""),
+        createdAt,
+      };
+      const workOrder = {
+        id: workOrderId,
+        workNo: orderNo,
+        orderId,
+        productName: sourceOrder.productName,
+        planQty: quantity,
+        status: "未开始",
+        currentProcess: "",
+        assigneeId: user.id,
+        qrToken: id("qr"),
+        createdAt,
+      };
+      const routes = sourceRoutes.map((sourceRoute, index) => ({
+        id: id("r"),
+        workOrderId,
+        processId: sourceRoute.processId,
+        processName: normalizeProcessName(sourceRoute.processName),
+        assignedRole: getProcessRole(sourceRoute.processName),
+        sequence: index + 1,
+        assignedTo: "",
+        qrToken: qrToken("rt"),
+        status: "待开始",
+        planQty: quantity,
+        completedQty: 0,
+        goodQty: 0,
+        badQty: 0,
+        reworkQty: 0,
+      }));
+      const sourceDrawings = db.drawings.filter((drawing) => !drawing.removedAt && (drawing.workOrderId === sourceWorkOrder.id || drawing.orderId === sourceOrder.id));
+      const drawings = sourceDrawings.map((sourceDrawing) => {
+        const drawing = {
+          ...sourceDrawing,
+          id: id("drw"),
+          orderId,
+          workOrderId,
+          customerId: sourceOrder.customerId,
+          uploaderId: user.id,
+          createdAt,
+        };
+        delete drawing.removedAt;
+        delete drawing.removedBy;
+        return drawing;
+      });
+      const attachments = drawings.map((drawing) => ({ ...drawing, id: id("att"), attachmentType: "drawing" }));
+
+      db.orders.push(order);
+      db.workOrders.push(workOrder);
+      db.routes.push(...routes);
+      db.drawings.push(...drawings);
+      db.attachments.push(...attachments);
+      syncWorkOrder(db, workOrderId);
+      appendAudit(db, user, "order-repeat-create", "order", orderId, {
+        sourceOrderId: sourceOrder.id,
+        sourceWorkOrderId: sourceWorkOrder.id,
+        newOrderId: orderId,
+        newWorkOrderId: workOrderId,
+        orderNo,
+        quantity,
+        dueDate,
+        priority,
+        weightKg: weight.value,
+        note: order.note,
+        processNames: routes.map((route) => route.processName),
+        drawingIds: drawings.map((drawing) => drawing.id),
+      });
+      await writeDb(db);
+      return send(res, 200, { ok: true, order, workOrder, routes, drawings });
     }
 
     if (req.method === "POST" && url.pathname === "/api/orders/update") {

@@ -524,7 +524,7 @@ function render(data, { preserveScroll = false } = {}) {
   const chartsHtml = `
     <section class="charts">
       <div class="panel">
-        <h2>准时率仪表</h2>
+        <h2>在产准时率</h2>
         <div class="gauge" style="--rate:${data.summary.onTimeRate}"><strong>${data.summary.onTimeRate}%</strong></div>
       </div>
       <div class="panel">

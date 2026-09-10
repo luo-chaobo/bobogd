@@ -61,9 +61,16 @@
         border-bottom: 2px solid #0b1830;
       }
 
+      .header-main {
+        flex: 1;
+        min-width: 0;
+      }
+
       h1 {
         margin: 0 0 6px;
         font-size: 24px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
 
       .meta {
@@ -255,10 +262,11 @@
           if (!workOrder) throw new Error("工单不存在");
           const routes = workOrder.routes || [];
           const orderNote = String(workOrder.order?.note || "").trim();
+          const customerName = String(workOrder.customer?.name || "").trim();
           page.innerHTML = `
             <section class="header">
-              <div>
-                <h1>${esc(workOrder.workNo)} 工序二维码</h1>
+              <div class="header-main">
+                <h1>${esc(workOrder.workNo)} ${esc(customerName || "客户未填写")}</h1>
                 <div class="meta">
                   产品：${esc(workOrder.productName)}<br />
                   交期：${esc(workOrder.order?.dueDate || "")} / 数量：${esc(workOrder.planQty)} ${esc(workOrder.order?.quantityUnit === "套" ? "套" : "件")}
