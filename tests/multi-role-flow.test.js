@@ -83,7 +83,7 @@ async function run() {
 
   const bootstrap = await request("/api/bootstrap", "admin");
   assert.strictEqual(bootstrap.status, 200);
-  assert.deepStrictEqual(bootstrap.data.processes.slice(0, 10).map((item) => item.name), ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "打磨", "喷塑", "装配"]);
+  assert.deepStrictEqual(bootstrap.data.processes.slice(0, 11).map((item) => item.name), ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "机加", "打磨", "喷塑", "装配"]);
   assert.strictEqual(bootstrap.data.routes.find((item) => item.id === "designRoute").assignedRole, "design_worker");
 
   const tasks = await request("/api/my-tasks", "multi");

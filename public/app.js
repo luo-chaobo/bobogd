@@ -92,6 +92,7 @@ const roleNames = {
   bend_worker: "折弯师傅",
   rivet_worker: "压铆师傅",
   tap_worker: "攻丝师傅",
+  machining_worker: "机加师傅",
   polish_worker: "打磨师傅",
   weld_worker: "焊接师傅",
   powder_worker: "喷塑师傅",
@@ -100,8 +101,8 @@ const roleNames = {
   admin: "管理员",
 };
 
-const roleOrder = ["owner", "manager", "office", "design_worker", "laser_worker", "bend_worker", "rivet_worker", "tap_worker", "weld_worker", "polish_worker", "powder_worker", "assembly_worker", "quality", "worker", "admin"];
-const assignableRoles = ["design_worker", "laser_worker", "bend_worker", "rivet_worker", "tap_worker", "weld_worker", "polish_worker", "powder_worker", "assembly_worker", "quality", "worker"];
+const roleOrder = ["owner", "manager", "office", "design_worker", "laser_worker", "bend_worker", "rivet_worker", "tap_worker", "weld_worker", "machining_worker", "polish_worker", "powder_worker", "assembly_worker", "quality", "worker", "admin"];
+const assignableRoles = ["design_worker", "laser_worker", "bend_worker", "rivet_worker", "tap_worker", "weld_worker", "machining_worker", "polish_worker", "powder_worker", "assembly_worker", "quality", "worker"];
 const processRoleMap = {
   设计: "design_worker",
   激光: "laser_worker",
@@ -110,6 +111,7 @@ const processRoleMap = {
   压铆: "rivet_worker",
   攻丝: "tap_worker",
   焊接: "weld_worker",
+  机加: "machining_worker",
   打磨: "polish_worker",
   喷塑: "powder_worker",
   装配: "assembly_worker",
@@ -127,7 +129,7 @@ const statusClass = {
   生产中: "warn",
 };
 
-const techProcessNames = ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "打磨", "喷塑", "装配", "质检"];
+const techProcessNames = ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "机加", "打磨", "喷塑", "装配", "质检"];
 const processColors = {
   设计: "#4f46e5",
   激光: "#e11d48",
@@ -136,6 +138,7 @@ const processColors = {
   压铆: "#d97706",
   攻丝: "#7c3aed",
   焊接: "#ea580c",
+  机加: "#ca8a04",
   打磨: "#64748b",
   喷塑: "#16a34a",
   装配: "#0f766e",

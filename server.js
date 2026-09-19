@@ -61,13 +61,14 @@ const roles = {
   tap_worker: "攻丝师傅",
   polish_worker: "打磨师傅",
   weld_worker: "焊接师傅",
+  machining_worker: "机加师傅",
   powder_worker: "喷塑师傅",
   assembly_worker: "装配师傅",
   quality: "质检",
   admin: "管理员",
 };
 
-const defaultProcesses = ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "打磨", "喷塑", "装配", "质检"];
+const defaultProcesses = ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "机加", "打磨", "喷塑", "装配", "质检"];
 const processAliases = {
   图纸设计: "设计",
   打孔攻丝: "攻丝",
@@ -81,6 +82,7 @@ const processRoleMap = {
   压铆: "rivet_worker",
   攻丝: "tap_worker",
   焊接: "weld_worker",
+  机加: "machining_worker",
   打磨: "polish_worker",
   喷塑: "powder_worker",
   装配: "assembly_worker",
@@ -98,6 +100,7 @@ const rolePriority = {
   rivet_worker: 20,
   tap_worker: 20,
   weld_worker: 20,
+  machining_worker: 20,
   polish_worker: 20,
   powder_worker: 20,
   assembly_worker: 20,
@@ -310,9 +313,7 @@ async function getWeappCode(route) {
 }
 
 function today(offset = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + offset);
-  return d.toISOString().slice(0, 10);
+  return shanghaiDateKey(new Date(Date.now() + offset * 24 * 60 * 60 * 1000));
 }
 
 function normalizeDate(value) {
@@ -483,6 +484,7 @@ async function readDb() {
     攻丝师傅: "tap_worker",
     打磨师傅: "polish_worker",
     焊接师傅: "weld_worker",
+    机加师傅: "machining_worker",
     喷塑师傅: "powder_worker",
     装配师傅: "assembly_worker",
   };
@@ -1693,25 +1695,40 @@ function shortDayLabel(key) {
   return key || "";
 }
 
-function todayTimeRange() {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { start, end };
+function dashboardProcessNames(db) {
+  const activeWorkOrderIds = new Set(
+    db.workOrders.filter((workOrder) => workOrder.status !== "已完成").map((workOrder) => workOrder.id)
+  );
+  const usedNames = new Set(
+    db.routes.filter((route) => activeWorkOrderIds.has(route.workOrderId)).map((route) => route.processName)
+  );
+  const names = new Set(
+    db.processes.filter((process) => process.active !== false || usedNames.has(process.name)).map((process) => process.name)
+  );
+  usedNames.forEach((name) => names.add(name));
+  return [...names].sort((a, b) => {
+    const orderDiff = processOrderIndex(a) - processOrderIndex(b);
+    if (orderDiff) return orderDiff;
+    const processA = db.processes.find((process) => process.name === a);
+    const processB = db.processes.find((process) => process.name === b);
+    return Number(processA?.sort || Number.MAX_SAFE_INTEGER) - Number(processB?.sort || Number.MAX_SAFE_INTEGER)
+      || a.localeCompare(b, "zh-Hans-CN");
+  });
 }
 
-function buildProcessLoad(db, processNames = defaultProcesses) {
-  const { start, end } = todayTimeRange();
+function buildProcessLoad(db, processNames = dashboardProcessNames(db)) {
+  const todayKey = shanghaiDateKey(new Date());
+  const activeWorkOrderIds = new Set(
+    db.workOrders.filter((workOrder) => workOrder.status !== "已完成").map((workOrder) => workOrder.id)
+  );
   return processNames.map((name) => {
     const process = db.processes.find((p) => p.name === name);
     const routes = db.routes.filter((r) => r.processName === name || (process && r.processId === process.id));
     const completedToday = routes.filter((route) => {
       if (route.status !== "已完成") return false;
-      const completedAt = new Date(route.completedAt || route.lastReportedAt || "");
-      return !Number.isNaN(completedAt.getTime()) && completedAt >= start && completedAt < end;
+      return shanghaiDateKey(route.completedAt || route.lastReportedAt || "") === todayKey;
     }).length;
-    const remaining = routes.filter((route) => route.status !== "已完成").length;
+    const remaining = routes.filter((route) => route.status !== "已完成" && activeWorkOrderIds.has(route.workOrderId)).length;
     return { name, completedToday, remaining, done: completedToday, todo: remaining };
   });
 }
@@ -1763,7 +1780,6 @@ function tvDrawingMeta(drawing) {
 }
 
 function buildTvDashboard(db, showCustomer = false, includeDrawings = false) {
-  const tvProcessNames = [...defaultProcesses];
   const data = enrich(db);
   const orders = data.workOrders.map((wo) => {
     const openQualityExceptions = db.exceptions.filter((item) => item.workOrderId === wo.id && item.status !== "已解决" && (item.qualityRouteId || item.source === "quality-inspection"));
@@ -1784,22 +1800,21 @@ function buildTvDashboard(db, showCustomer = false, includeDrawings = false) {
       routes,
     };
   });
-  const todayText = today(0);
-  const todayReports = db.reports.filter((r) => String(r.createdAt || "").startsWith(todayText));
-  const finishedWorkOrdersToday = orders.filter((wo) => String(wo.completedAt || "").startsWith(todayText)).length;
+  const todayText = shanghaiDateKey(new Date());
+  const finishedWorkOrdersToday = orders.filter((wo) => shanghaiDateKey(wo.completedAt) === todayText).length;
   const active = orders
     .filter((w) => !["已完成"].includes(w.status))
     .sort((a, b) => a.dueAt - b.dueAt);
   const delayed = active.filter((w) => w.dueLevel === "overdue");
   const urgent = active.filter((w) => w.dueLevel === "urgent");
   const rushOrders = active.filter((w) => w.isRush);
-  const waiting = db.routes.filter((r) => ["待开始", "暂停"].includes(r.status)).length;
   const onTimeRate = active.length ? Math.round(((active.length - delayed.length) / active.length) * 100) : 100;
-  const processLoad = buildProcessLoad(db, tvProcessNames);
+  const processLoad = buildProcessLoad(db);
+  const waiting = processLoad.reduce((sum, process) => sum + process.remaining, 0);
   const statusDistribution = {
-    active: db.routes.filter((r) => ["进行中"].includes(r.status)).length,
+    active: active.length - delayed.length,
     delayed: delayed.length,
-    finishedToday: todayReports.length,
+    finishedToday: finishedWorkOrdersToday,
     waiting,
   };
   const recentReports = db.reports
@@ -1813,10 +1828,10 @@ function buildTvDashboard(db, showCustomer = false, includeDrawings = false) {
       return { ...report, routeName: route?.processName || "", workNo: wo?.workNo || "", productName: wo?.productName || "", reporterName: user?.name || "", timeText: formatDateTime(report.createdAt) };
     });
   const reportTrend = Array.from({ length: 7 }, (_, index) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - index));
-    const key = dateKey(d);
-    const value = orders.filter((wo) => String(wo.completedAt || "").startsWith(key)).length;
+    const d = new Date(`${todayText}T00:00:00+08:00`);
+    d.setUTCDate(d.getUTCDate() - (6 - index));
+    const key = shanghaiDateKey(d);
+    const value = orders.filter((wo) => shanghaiDateKey(wo.completedAt) === key).length;
     return { key, label: shortDayLabel(key), value };
   });
   return {
@@ -1831,7 +1846,7 @@ function buildTvDashboard(db, showCustomer = false, includeDrawings = false) {
       waitingRoutes: waiting,
       totalWorkOrders: orders.length,
       onTimeRate,
-      finishedToday: todayReports.length,
+      finishedToday: finishedWorkOrdersToday,
       finishedWorkOrdersToday,
     },
     processLoad,
@@ -2676,20 +2691,11 @@ async function handleApi(req, res) {
       if (schedule.error) return send(res, 400, { error: schedule.error });
       const existingRoutes = db.routes.filter((r) => r.workOrderId === workOrder.id);
       let sequence = Number(body.sequence || existingRoutes.length + 1);
-      if (!body.sequence && process.name === "切管") {
-        const laserRoutes = existingRoutes.filter((route) => route.processName === "激光");
+      if (!body.sequence) {
         const laterRoute = existingRoutes
-          .filter((route) => processOrderIndex(route.processName) > processOrderIndex("切管"))
+          .filter((route) => processOrderIndex(route.processName) > processOrderIndex(process.name))
           .sort((a, b) => a.sequence - b.sequence)[0];
-        sequence = laserRoutes.length
-          ? Math.max(...laserRoutes.map((route) => Number(route.sequence || 0))) + 1
-          : Number(laterRoute?.sequence || existingRoutes.length + 1);
-      }
-      if (!body.sequence && process.name === "激光") {
-        const tubeRoute = existingRoutes
-          .filter((route) => route.processName === "切管")
-          .sort((a, b) => a.sequence - b.sequence)[0];
-        if (tubeRoute) sequence = Number(tubeRoute.sequence);
+        sequence = Number(laterRoute?.sequence || existingRoutes.length + 1);
       }
       db.routes
         .filter((r) => r.workOrderId === workOrder.id && r.sequence >= sequence)

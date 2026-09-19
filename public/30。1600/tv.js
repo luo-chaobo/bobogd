@@ -187,7 +187,7 @@ function render(data, { preserveScroll = false } = {}) {
       <div class="panel">
         <h2>工单状态分布</h2>
         <div class="donut-legend">
-          <span><i class="legend-dot"></i>执行中 ${dist.active}</span>
+          <span><i class="legend-dot"></i>正常在产 ${dist.active}</span>
           <span><i class="legend-dot red"></i>延期 ${dist.delayed}</span>
           <span><i class="legend-dot green"></i>今日完成 ${dist.finishedToday}</span>
         </div>
