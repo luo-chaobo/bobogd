@@ -11,6 +11,8 @@ assert.ok(source.includes("openFulfillmentOrderId"));
 assert.ok(source.includes("fulfillment-popover"));
 assert.ok(source.includes('已发货: "shipped"'));
 assert.ok(source.includes('已开票: "invoiced"'));
+assert.ok(source.includes('result?.platformSync === "pending"'));
+assert.ok(source.includes("BOBO状态已保存，平台同步排队重试中"));
 assert.ok(source.includes('event.key !== "Escape"'));
 assert.ok(!source.includes('class="fulfillment-checks"'));
 assert.ok(source.includes("customerFeedbackPage"));

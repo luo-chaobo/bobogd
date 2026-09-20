@@ -26,6 +26,8 @@ const state = {
     to: "",
     customerId: "",
     status: "",
+    source: "",
+    sourceChannel: "",
   },
   historyResults: {
     workOrders: [],
@@ -204,6 +206,42 @@ function loginPage() {
 
 function tag(text) {
   return `<span class="tag ${statusClass[text] || ""}">${escapeHtml(text)}</span>`;
+}
+
+const sourceChannelLabels = {
+  website: "企业官网",
+  order_platform: "接单平台",
+  miniprogram: "未来机械小程序",
+};
+
+function orderSource(item) {
+  const order = item?.order || item || {};
+  const platform = order.orderOrigin === "platform" && sourceChannelLabels[order.sourceChannel];
+  return platform
+    ? { origin: "platform", originLabel: "平台单", channel: order.sourceChannel, channelLabel: sourceChannelLabels[order.sourceChannel] }
+    : { origin: "factory", originLabel: "工厂单", channel: "factory_manual", channelLabel: "工厂单" };
+}
+
+function orderSourceBadge(item) {
+  const source = orderSource(item);
+  return tag(source.origin === "platform" ? `${source.originLabel} · ${source.channelLabel}` : source.originLabel);
+}
+
+function filterWorkOrdersBySource(workOrders, source, sourceChannel) {
+  return workOrders.filter((item) => {
+    const current = orderSource(item);
+    if (source && current.origin !== source) return false;
+    return !sourceChannel || current.channel === sourceChannel;
+  });
+}
+
+function completionSourceSummaryRows(summary = {}) {
+  return [
+    ["工厂单", Number(summary.factory || 0)],
+    ["企业官网", Number(summary.website || 0)],
+    ["接单平台", Number(summary.order_platform || 0)],
+    ["未来机械小程序", Number(summary.miniprogram || 0)],
+  ];
 }
 
 function formatDateTime(value) {
@@ -572,7 +610,7 @@ function workOrderTable(data, options = {}) {
               .map(
                 (w) => `
                   <tr>
-                    <td>${escapeHtml(w.workNo)}</td>
+                    <td>${escapeHtml(w.workNo)}<br>${orderSourceBadge(w)}</td>
                     <td>${escapeHtml(w.customer?.name || "")}<br><span class="muted">${escapeHtml(w.productName)}</span><br><span class="muted">${escapeHtml(w.planQty)} ${workOrderQuantityUnit(w)}</span></td>
                     <td>${escapeHtml(formatDateTime(w.order?.createdAt || w.createdAt))}</td>
                     <td>${escapeHtml(w.currentProcess || "-")}</td>
@@ -685,7 +723,7 @@ function dispatchPage(data) {
             return `
             <div class="card dispatch-work-card ${collapsed ? "collapsed" : ""}">
               <div class="task-title dispatch-work-head">
-                <div><h3>${escapeHtml(w.workNo)} ${escapeHtml(w.productName)}</h3><p class="muted">${escapeHtml(w.customer?.name || "")} / 交期 ${escapeHtml(w.order?.dueDate || "")}</p><p class="muted">创建时间 ${escapeHtml(formatDateTime(w.order?.createdAt || w.createdAt))}</p></div>
+                <div><h3>${escapeHtml(w.workNo)} ${escapeHtml(w.productName)}</h3><p>${orderSourceBadge(w)}</p><p class="muted">${escapeHtml(w.customer?.name || "")} / 交期 ${escapeHtml(w.order?.dueDate || "")}</p><p class="muted">创建时间 ${escapeHtml(formatDateTime(w.order?.createdAt || w.createdAt))}</p></div>
                 <button class="dispatch-collapse-toggle" data-toggle-dispatch-collapse="${w.id}" title="${collapsed ? "展开工序" : "收起工序"}" aria-label="${collapsed ? "展开工序" : "收起工序"}">${collapsed ? "v" : "^"}</button>
                 <div class="actions">${tag(w.status)}<button class="btn secondary compact" data-print-qr-sheet="${w.id}">打印二维码</button></div>
               </div>
@@ -825,6 +863,8 @@ function historyPage(data) {
       <div class="date-combo"><input id="historyTo" placeholder="结束时间" inputmode="numeric" value="${escapeHtml(slashDateFromIso(filters.to))}" /><button class="date-pick-trigger" type="button" data-history-date="to">选择</button><input id="historyToPicker" class="date-hidden-picker" type="date" value="${escapeHtml(filters.to)}" /></div>
       <select id="historyCustomer"><option value="">全部客户</option>${data.customers.map((c) => `<option value="${c.id}" ${filters.customerId === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}</select>
       <select id="historyStatus"><option value="">全部状态</option>${["生产中", "已完成", "已发货", "已开票"].map((name) => `<option value="${name}" ${filters.status === name ? "selected" : ""}>${name}</option>`).join("")}</select>
+      <label class="field"><span>来源筛选</span><select id="historySource"><option value="">全部来源</option><option value="factory" ${filters.source === "factory" ? "selected" : ""}>工厂单</option><option value="platform" ${filters.source === "platform" ? "selected" : ""}>平台单</option></select></label>
+      <label class="field"><span>平台渠道</span><select id="historySourceChannel"><option value="">全部平台渠道</option>${Object.entries(sourceChannelLabels).map(([value, label]) => `<option value="${value}" ${filters.sourceChannel === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
     </section>
     <section class="panel" style="margin-bottom:14px">
       <h3>历史工单</h3>
@@ -834,7 +874,7 @@ function historyPage(data) {
           <tbody>
             ${workOrders.length ? workOrders.map((item) => `
               <tr>
-                <td><button class="history-order-link" type="button" data-history-order="${item.id}">${escapeHtml(item.workNo)}</button></td>
+                <td><button class="history-order-link" type="button" data-history-order="${item.id}">${escapeHtml(item.workNo)}</button><br>${orderSourceBadge(item)}</td>
                 <td>${escapeHtml(item.customerName)}<br><span class="muted">${escapeHtml(item.productName)}</span><br><span class="muted">${escapeHtml(item.planQty)} ${quantityUnit(item.quantityUnit)}</span></td>
                 <td>${item.weightKg === null || item.weightKg === undefined ? "-" : `${escapeHtml(item.weightKg)} KG`}</td>
                 <td>${escapeHtml(formatDateTime(item.createdAt))}</td>
@@ -863,7 +903,7 @@ function historyOrderModal(data) {
   const disabled = repeatMode ? "" : "disabled";
   const routes = (item.routes || []).filter((route) => route.routeType !== "rework").sort((a, b) => a.sequence - b.sequence);
   return `<div class="dialog-backdrop" data-action="closeHistoryOrder"><section class="dialog history-order-dialog ${repeatMode ? "history-order-editing" : "history-order-readonly"}" onclick="event.stopPropagation()">
-    <div class="topbar"><div><h3>${repeatMode ? "创建返单" : "订单详情"}</h3><p class="muted">原工单：${escapeHtml(item.workNo)} / 原订单：${escapeHtml(item.orderNo)} / 状态：${escapeHtml(item.productionStatus)}${item.completedAt ? ` / 完工：${escapeHtml(formatDateTime(item.completedAt))}` : ""}</p></div><button class="btn secondary compact" data-action="closeHistoryOrder">关闭</button></div>
+    <div class="topbar"><div><h3>${repeatMode ? "创建返单" : "订单详情"}</h3><p>${orderSourceBadge(item)}</p><p class="muted">原工单：${escapeHtml(item.workNo)} / 原订单：${escapeHtml(item.orderNo)} / 状态：${escapeHtml(item.productionStatus)}${item.completedAt ? ` / 完工：${escapeHtml(formatDateTime(item.completedAt))}` : ""}</p></div><button class="btn secondary compact" data-action="closeHistoryOrder">关闭</button></div>
     <div class="form-grid history-order-fields" ${repeatMode ? "" : 'inert aria-disabled="true"'}>
       <label class="field"><span>订单号</span><input id="repeatOrderNo" value="${escapeHtml(item.orderNo)}" ${editable}></label>
       <label class="field locked-field"><span>客户</span><input value="${escapeHtml(item.customerName)}" readonly></label>
@@ -1032,6 +1072,7 @@ function reportsPage(data) {
     return date >= state.reportsFrom && date <= state.reportsTo;
   });
   const visibleReports = sortReportsByNewest(filteredReports);
+  const sourceRows = completionSourceSummaryRows(data.completionSourceSummary);
   return `
     <div class="topbar report-topbar"><h2>基础报表</h2><div class="actions report-actions">
       <label class="compact-date-field"><span>开始日期</span><input id="reportsFrom" type="date" value="${state.reportsFrom}" /></label>
@@ -1053,6 +1094,7 @@ function reportsPage(data) {
         })
         .join("")}
     </section>
+    <section class="panel" style="margin-top:14px"><h3>来源统计</h3><p class="muted">近30天完工来源</p><div class="grid cols-4">${sourceRows.map(([label, count]) => `<div class="card metric"><span>${label}</span><strong>${count} 单</strong><small>${label} ${count} 单</small></div>`).join("")}</div></section>
     <section class="panel" style="margin-top:14px">
       <div class="section-heading"><h3>报工记录</h3><span class="muted">${state.reportsFrom} 至 ${state.reportsTo}，共 ${visibleReports.length} 条</span></div>
       <div class="table-wrap"><table data-sort-table="reports" data-default-sort-column="0" data-default-sort-direction="desc"><thead><tr><th>时间</th><th>人员</th><th>工单</th><th>工序</th><th>报工数量</th><th>质量/返工结果</th><th>备注</th></tr></thead><tbody>
@@ -1069,7 +1111,7 @@ function reportsPage(data) {
             const resultText = isQuality
               ? `合格 ${Number(r.goodQty || 0)} ${unit} / 不合格 ${Number(r.badQty || 0)} ${unit}${r.disposition ? ` / ${escapeHtml(r.disposition)}` : ""}`
               : `返工 ${Number(r.reworkQty || 0)} ${unit}`;
-            return `<tr><td data-sort-value="${escapeHtml(r.createdAt || "")}">${new Date(r.createdAt).toLocaleString()}</td><td data-sort-value="${escapeHtml(reporterName)}">${escapeHtml(reporterName)}</td><td data-sort-value="${escapeHtml(wo?.workNo || "")}">${escapeHtml(wo?.workNo || "")}</td><td data-sort-value="${escapeHtml(route?.processName || "")}">${escapeHtml(route?.processName || "")}</td><td data-sort-value="${Number(r.completedQty || r.inspectedQty || 0)}">${quantityText}</td><td data-sort-value="${Number(r.badQty || r.reworkQty || 0)}">${resultText}</td><td data-sort-value="${escapeHtml(r.note || "")}">${escapeHtml(r.note || "")}</td></tr>`;
+            return `<tr><td data-sort-value="${escapeHtml(r.createdAt || "")}">${new Date(r.createdAt).toLocaleString()}</td><td data-sort-value="${escapeHtml(reporterName)}">${escapeHtml(reporterName)}</td><td data-sort-value="${escapeHtml(wo?.workNo || "")}">${escapeHtml(wo?.workNo || "")}<br>${orderSourceBadge(wo)}</td><td data-sort-value="${escapeHtml(route?.processName || "")}">${escapeHtml(route?.processName || "")}</td><td data-sort-value="${Number(r.completedQty || r.inspectedQty || 0)}">${quantityText}</td><td data-sort-value="${Number(r.badQty || r.reworkQty || 0)}">${resultText}</td><td data-sort-value="${escapeHtml(r.note || "")}">${escapeHtml(r.note || "")}</td></tr>`;
           })
           .join("")}
       </tbody></table></div>
@@ -1251,7 +1293,7 @@ function taskCard(t) {
   return `
     <div class="card">
       <div class="task-title">
-        <div><h3>${escapeHtml(t.processName)} · ${escapeHtml(t.workOrder?.productName || "")}</h3><p class="muted">${escapeHtml(t.workOrder?.workNo || "")} / 剩余 ${remain} ${unit}</p></div>
+        <div><h3>${escapeHtml(t.processName)} · ${escapeHtml(t.workOrder?.productName || "")}</h3><p>${orderSourceBadge(t.workOrder)}</p><p class="muted">${escapeHtml(t.workOrder?.workNo || "")} / 剩余 ${remain} ${unit}</p></div>
         ${tag(t.status)}
       </div>
       <div class="progress"><div style="width:${Math.round((t.completedQty / t.planQty) * 100)}%"></div></div>
@@ -1594,7 +1636,8 @@ function bindEvents() {
       const controls = [...document.querySelectorAll(`[data-fulfillment][data-order-id="${orderId}"]`)];
       controls.forEach((control) => { control.disabled = true; });
       try {
-        await api("/api/orders/fulfillment", { method: "POST", body: JSON.stringify({ orderId, shipped: controls.find((item) => item.dataset.fulfillment === "shipped")?.checked === true, invoiced: controls.find((item) => item.dataset.fulfillment === "invoiced")?.checked === true }) });
+        const result = await api("/api/orders/fulfillment", { method: "POST", body: JSON.stringify({ orderId, shipped: controls.find((item) => item.dataset.fulfillment === "shipped")?.checked === true, invoiced: controls.find((item) => item.dataset.fulfillment === "invoiced")?.checked === true }) });
+        if (result?.platformSync === "pending") toast("BOBO状态已保存，平台同步排队重试中");
         await refresh();
         await searchHistory();
       } catch (error) { toast(error.message); await searchHistory(); }
@@ -1796,7 +1839,7 @@ async function handleAction(action) {
   if (action === "saveRepeatOrder") await saveRepeatOrder();
   if (action === "openFinishedHistory") {
     state.view = "history";
-    state.historyFilters = { dateType: "completedAt", from: state.dashboardFinishedFrom, to: state.dashboardFinishedTo, customerId: "", status: "" };
+    state.historyFilters = { dateType: "completedAt", from: state.dashboardFinishedFrom, to: state.dashboardFinishedTo, customerId: "", status: "", source: "", sourceChannel: "" };
     await searchHistory(true);
   }
   if (action === "saveOrderEdit") await saveOrderEdit();
@@ -2209,6 +2252,8 @@ async function searchHistory(useState = false) {
       to: normalizeDateInput(el("historyTo")?.value || "") || el("historyToPicker")?.value || "",
       customerId: el("historyCustomer")?.value || "",
       status: el("historyStatus")?.value || "",
+      source: el("historySource")?.value || "",
+      sourceChannel: el("historySourceChannel")?.value || "",
     };
     const query = Object.entries({
       from: state.historyFilters.from,
@@ -2216,6 +2261,8 @@ async function searchHistory(useState = false) {
       customerId: state.historyFilters.customerId,
       dateType: state.historyFilters.dateType,
       status: state.historyFilters.status,
+      source: state.historyFilters.source,
+      sourceChannel: state.historyFilters.sourceChannel,
     })
       .filter(([, value]) => value)
       .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)

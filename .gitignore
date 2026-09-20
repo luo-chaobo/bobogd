@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 .tools/
+config.local.json
 
 data/
 db/

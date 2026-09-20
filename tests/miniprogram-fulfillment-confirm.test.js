@@ -7,15 +7,17 @@ const pagePath = path.join(root, "miniprogram", "pages", "completion-details", "
 let pageDefinition;
 let confirmResult = false;
 let requests = [];
+let toasts = [];
+let platformSyncResult = { ok: true, platformSync: "pending" };
 
 global.Page = (definition) => { pageDefinition = definition; };
 global.wx = {
   showModal(options) { options.success({ confirm: confirmResult }); },
-  showToast() {}
+  showToast(options) { toasts.push(options); }
 };
 api.request = async (url, options) => {
   requests.push({ url, options });
-  return { ok: true };
+  return platformSyncResult;
 };
 require(pagePath);
 
@@ -50,6 +52,14 @@ async function run() {
   assert.strictEqual(requests.length, 1);
   assert.strictEqual(requests[0].url, "/api/orders/fulfillment");
   assert.deepStrictEqual(requests[0].options.data, { orderId: "order", shipped: false, invoiced: true });
+
+  ctx = context();
+  requests = [];
+  toasts = [];
+  platformSyncResult = { ok: true, platformSync: "pending" };
+  await pageDefinition.updateFulfillment.call(ctx, { currentTarget: { dataset: { orderId: "order", type: "shipped" } }, detail: { value: true } });
+  assert.strictEqual(requests[0].options.data.shipped, true);
+  assert.strictEqual(toasts[0].title, "已保存，平台同步中");
   console.log("miniprogram-fulfillment-confirm: ok");
 }
 
