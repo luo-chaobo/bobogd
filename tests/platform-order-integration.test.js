@@ -32,7 +32,7 @@ function seedDatabase() {
   fs.writeFileSync(path.join(tempRoot, "public", "index.html"), "test", "utf8");
   fs.writeFileSync(path.join(tempRoot, "data", "db.json"), JSON.stringify({
     users: [{ id: "manager", name: "主管", phone: "1", role: "manager", roles: ["manager"], password: "1", active: true }],
-    deletedUsers: [], processes: [], customers: [{ id: "c1", name: "工厂客户", active: true }],
+    deletedUsers: [], processes: [{ id: "p1", name: "激光", sort: 1, active: true }], customers: [{ id: "c1", name: "工厂客户", active: true }],
     orders: [{ id: "factory-order", orderNo: "FACTORY-1", customerId: "c1", productName: "工厂件", quantity: 1, dueDate: "2026-10-01", priority: "普通", status: "未开始", note: "" }],
     workOrders: [], routes: [], reports: [], exceptions: [], drawings: [], attachments: [], auditLogs: [], settings: {}, customerFeedbacks: [],
     integrationNonces: [{ nonce: "expired-nonce", createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() }]
@@ -93,6 +93,15 @@ async function internalUpdate(body) {
   return { status: response.status, data: await response.json() };
 }
 
+async function confirmPlatformOrder(body) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/platform-orders/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-user-id": "manager" },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, data: await response.json() };
+}
+
 async function run() {
   seedDatabase();
   await startServer(secret);
@@ -101,15 +110,30 @@ async function run() {
   assert.strictEqual(health.status, 200);
   assert.deepStrictEqual(await health.json(), { enabled: true, service: "external-work-orders", processMode: "single-process" });
 
-  const body = { externalOrderNumber: "PLATFORM-1", sourceChannel: "website", customer: "平台客户", phone: "13800000000", quantity: 5, expectedDate: "2026-10-12", description: "壳体打样", material: "304不锈钢" };
+  const body = { externalOrderNumber: "PLATFORM-1", sourceChannel: "website", customer: "平台客户", phone: "13800000000", quantity: 5, expectedDate: "2026-10-12", description: "壳体打样", material: "304不锈钢", region: "浙江省 宁波市 鄞州区", deliveryAddress: "学府路 1 号" };
   const created = await external(body, "nonce-create");
   assert.strictEqual(created.status, 201);
   assert.strictEqual(created.data.order.orderNo, "PLATFORM-1");
   assert.deepStrictEqual(
     { orderOrigin: created.data.order.orderOrigin, sourceChannel: created.data.order.sourceChannel, externalOrderNumber: created.data.order.externalOrderNumber, orderStatus: created.data.order.status, workOrderStatus: created.data.workOrder.status },
-    { orderOrigin: "platform", sourceChannel: "website", externalOrderNumber: "PLATFORM-1", orderStatus: "待排产", workOrderStatus: "待排产" }
+    { orderOrigin: "platform", sourceChannel: "website", externalOrderNumber: "PLATFORM-1", orderStatus: "待正式创建", workOrderStatus: "待排产" }
   );
   assert.strictEqual(created.data.routes.length, 0);
+  assert.strictEqual(created.data.workOrder.creationStatus, "pending");
+  assert.strictEqual(created.data.order.region, body.region);
+  assert.strictEqual(created.data.order.deliveryAddress, body.deliveryAddress);
+  const pendingTv = await (await fetch(`http://127.0.0.1:${port}/api/tv-dashboard?source=platform`)).json();
+  assert.deepStrictEqual(pendingTv.activeOrders, []);
+
+  const confirmed = await confirmPlatformOrder({ orderId: created.data.order.id, processIds: ["p1"] });
+  assert.strictEqual(confirmed.status, 200);
+  assert.strictEqual(confirmed.data.workOrder.creationStatus, "confirmed");
+  assert.strictEqual(confirmed.data.routes.length, 1);
+  assert.strictEqual((await confirmPlatformOrder({ orderId: created.data.order.id, processIds: ["p1"] })).status, 409);
+  const confirmedTv = await (await fetch(`http://127.0.0.1:${port}/api/tv-dashboard?source=platform`)).json();
+  assert.deepStrictEqual(confirmedTv.activeOrders.map((item) => item.id), [created.data.workOrder.id]);
+  const factoryTv = await (await fetch(`http://127.0.0.1:${port}/api/tv-dashboard?source=factory`)).json();
+  assert.deepStrictEqual(factoryTv.activeOrders, []);
 
   const sameNonceBody = { ...body, externalOrderNumber: "CONCURRENT-NONCE" };
   const sameNonce = await Promise.all([
@@ -164,7 +188,7 @@ async function run() {
   assert.ok(db.integrationNonces.some((item) => item.nonce === "nonce-create"));
   assert.ok(!db.integrationNonces.some((item) => item.nonce === "expired-nonce"));
   assert.strictEqual(db.workOrders.filter((item) => item.orderId === created.data.order.id).length, 1);
-  assert.strictEqual(db.routes.filter((item) => item.workOrderId === created.data.workOrder.id).length, 0);
+  assert.strictEqual(db.routes.filter((item) => item.workOrderId === created.data.workOrder.id).length, 1);
 
   await stopServer();
   await startServer(secret);

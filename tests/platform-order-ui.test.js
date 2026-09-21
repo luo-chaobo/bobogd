@@ -40,12 +40,25 @@ const websiteWorkOrder = { id: "website", workNo: "P-1", productName: "网站件
 const marketplaceWorkOrder = { id: "marketplace", workNo: "P-2", productName: "平台件", planQty: 4, status: "生产中", order: { orderOrigin: "platform", sourceChannel: "order_platform", externalOrderNumber: "MARKET-8" } };
 const miniprogramWorkOrder = { id: "mini", workNo: "P-3", productName: "小程序件", planQty: 5, status: "生产中", order: { orderOrigin: "platform", sourceChannel: "miniprogram", externalOrderNumber: "MINI-7" } };
 
-test("订单来源徽标为工厂和三种平台渠道提供可见中文文案", () => {
+test("后台订单只区分工厂单和平台单", () => {
   const app = loadApp();
   assert.match(app.orderSourceBadge(factoryWorkOrder), /工厂单/);
-  assert.match(app.orderSourceBadge(websiteWorkOrder), /平台单.*企业官网/);
-  assert.match(app.orderSourceBadge(marketplaceWorkOrder), /平台单.*接单平台/);
-  assert.match(app.orderSourceBadge(miniprogramWorkOrder), /平台单.*未来机械小程序/);
+  assert.match(app.orderSourceBadge(websiteWorkOrder), />平台单</);
+  assert.doesNotMatch(app.orderSourceBadge(websiteWorkOrder), /企业官网/);
+  assert.doesNotMatch(app.productionSourceBadge(factoryWorkOrder), /工厂单/);
+  assert.match(app.productionSourceBadge(miniprogramWorkOrder), /平台单/);
+});
+
+test("订单工单侧栏和生产总览提供三种来源视图", () => {
+  const app = loadApp();
+  const data = {
+    workOrders: [factoryWorkOrder, websiteWorkOrder], orders: [], customers: [], routes: [], reports: [], exceptions: [], drawings: [],
+    permissions: {}, completionSourceSummary: {},
+  };
+  assert.match(app.dashboardSourceTabs(), /全部订单/);
+  assert.match(app.dashboardSourceTabs(), /工厂单/);
+  assert.match(app.dashboardSourceTabs(), /平台单/);
+  assert.strictEqual(app.filterWorkOrdersBySource(data.workOrders, "platform", "").length, 1);
 });
 
 test("来源筛选保留工厂单并可继续按平台渠道过滤", () => {
@@ -94,11 +107,11 @@ test("订单、派工、工人任务、历史详情和基础报表渲染来源�
   };
   app.websiteWorkOrder = websiteWorkOrder;
   vm.runInContext('state.user = { id: "worker", role: "worker", roles: ["worker"] }; state.historyFilters = { dateType: "createdAt", from: "", to: "", customerId: "", status: "", source: "", sourceChannel: "" }; state.historyOrderId = "website"; state.historyResults = { workOrders: [{ ...websiteWorkOrder, customerName: "客户", quantityUnit: "件", productionStatus: "已完成", orderNo: "P-1", routes: [] }], loaded: true }; state.reportsFrom = "2026-09-01"; state.reportsTo = "2026-09-30";', app);
-  assert.match(app.workOrderTable(data), /企业官网/);
-  assert.match(app.dispatchPage(data), /企业官网/);
-  assert.match(app.taskCard({ ...data.routes[0], workOrder: websiteWorkOrder }), /企业官网/);
+  assert.match(app.workOrderTable(data), /平台单/);
+  assert.match(app.dispatchPage(data), /平台单/);
+  assert.match(app.taskCard({ ...data.routes[0], workOrder: websiteWorkOrder }), /平台单/);
   assert.match(app.historyPage(data), /来源筛选/);
-  assert.match(app.historyOrderModal(data), /企业官网/);
+  assert.match(app.historyOrderModal(data), /平台单/);
   assert.match(app.reportsPage(data), /来源统计/);
   assert.match(app.reportsPage(data), /近30天完工来源/);
   assert.match(app.reportsPage(data), /接单平台 1 单/);

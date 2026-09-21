@@ -292,6 +292,13 @@ textarea:focus {
   gap: 8px;
 }
 
+.nav-group { display:grid; gap:6px; }
+.nav-group > span { padding:10px 14px 2px; color:#94a3b8; font-size:13px; }
+.nav-group > button { padding-left:28px; }
+.nav-count { float:right; min-width:22px; padding:1px 6px; border-radius:999px; background:#ef4444; color:#fff; text-align:center; }
+.source-tabs { display:flex; gap:8px; margin-top:8px; }
+.source-tabs .active { background:#0f766e; color:#fff; }
+
 .nav button {
   text-align: left;
   border-radius: 6px;

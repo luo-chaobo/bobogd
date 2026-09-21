@@ -1,6 +1,8 @@
 const state = {
   user: JSON.parse(localStorage.getItem("work_user") || "null"),
   view: "dashboard",
+  dashboardSource: "all",
+  orderSourceChannel: "",
   mobileTab: "tasks",
   data: null,
   previewFiles: [],
@@ -10,6 +12,7 @@ const state = {
   collapsedEmployeeRoles: {},
   pendingDrawingIds: [],
   editingOrderId: "",
+  confirmingPlatformOrderId: "",
   editRemovedDrawingIds: [],
   auditData: { items: [], total: 0, page: 1, pageSize: 20 },
   auditSort: { sortBy: "createdAt", sortDir: "desc" },
@@ -224,7 +227,11 @@ function orderSource(item) {
 
 function orderSourceBadge(item) {
   const source = orderSource(item);
-  return tag(source.origin === "platform" ? `${source.originLabel} · ${source.channelLabel}` : source.originLabel);
+  return tag(source.originLabel);
+}
+
+function productionSourceBadge(item) {
+  return orderSource(item).origin === "platform" ? tag("平台单") : "";
 }
 
 function filterWorkOrdersBySource(workOrders, source, sourceChannel) {
@@ -233,6 +240,12 @@ function filterWorkOrdersBySource(workOrders, source, sourceChannel) {
     if (source && current.origin !== source) return false;
     return !sourceChannel || current.channel === sourceChannel;
   });
+}
+
+function dashboardSourceTabs() {
+  return `<div class="source-tabs">${[["all", "全部订单"], ["factory", "工厂单"], ["platform", "平台单"]]
+    .map(([value, label]) => `<button type="button" class="btn secondary compact ${state.dashboardSource === value ? "active" : ""}" data-dashboard-source="${value}">${label}</button>`)
+    .join("")}</div>`;
 }
 
 function completionSourceSummaryRows(summary = {}) {
@@ -563,15 +576,19 @@ function validateOrderForm(processIds) {
 }
 
 function dashboard(data) {
-  const overdue = data.workOrders.filter((w) => w.overdue).length;
+  const workOrders = filterWorkOrdersBySource(data.workOrders, state.dashboardSource === "all" ? "" : state.dashboardSource, "")
+    .filter((workOrder) => workOrder.creationStatus !== "pending");
+  const workOrderIds = new Set(workOrders.map((workOrder) => workOrder.id));
+  const dashboardData = { ...data, workOrders, routes: data.routes.filter((route) => workOrderIds.has(route.workOrderId)) };
+  const overdue = workOrders.filter((w) => w.overdue).length;
   const openExceptions = data.exceptions.filter((e) => e.status !== "已解决").length;
-  const active = data.workOrders.filter((w) => w.status !== "已完成").length;
-  const finished = data.workOrders.filter((w) => w.status === "已完成" && String(w.completedAt || "").slice(0, 10) >= state.dashboardFinishedFrom && String(w.completedAt || "").slice(0, 10) <= state.dashboardFinishedTo).length;
+  const active = workOrders.filter((w) => w.status !== "已完成").length;
+  const finished = workOrders.filter((w) => w.status === "已完成" && String(w.completedAt || "").slice(0, 10) >= state.dashboardFinishedFrom && String(w.completedAt || "").slice(0, 10) <= state.dashboardFinishedTo).length;
   const dispatchBoardButton = data.permissions?.viewBoardCustomer
     ? '<button class="btn secondary" data-action="openDispatchBoard">派工看板</button>'
     : "";
   return `
-    <div class="topbar"><h2>生产总览</h2><div class="actions">${dispatchBoardButton}<button class="btn secondary" data-action="openMobileTv">手机横屏看板</button><button class="btn secondary" data-action="openTv">打开大屏看板</button><button class="btn secondary" data-action="refresh">刷新</button></div></div>
+    <div class="topbar"><div><h2>生产总览</h2>${dashboardSourceTabs()}</div><div class="actions">${dispatchBoardButton}<button class="btn secondary" data-action="openMobileTv">手机横屏看板</button><button class="btn secondary" data-action="openTv">打开大屏看板</button><button class="btn secondary" data-action="refresh">刷新</button></div></div>
     <section class="grid cols-4">
       <div class="card metric"><span>生产中工单</span><strong>${active}</strong></div>
       <div class="card metric finished-metric"><button type="button" class="metric-link" data-action="openFinishedHistory"><span>已完成工单</span><strong>${finished}</strong></button><div class="metric-date-range"><input id="dashboardFinishedFrom" type="date" value="${state.dashboardFinishedFrom}" aria-label="完成开始日期"><span>至</span><input id="dashboardFinishedTo" type="date" value="${state.dashboardFinishedTo}" aria-label="完成结束日期"></div></div>
@@ -581,16 +598,17 @@ function dashboard(data) {
     <section class="panel" style="margin-top:14px">
       <h3>工序负荷</h3>
       <div class="grid cols-3">
-        ${processLoadCards(data)}
+        ${processLoadCards(dashboardData)}
       </div>
     </section>
-    ${workOrderTable(data)}
+    ${workOrderTable(dashboardData, { productionBoard: true })}
   `;
 }
 
-function visibleWorkOrders(data) {
+function visibleWorkOrders(data, options = {}) {
   return data.workOrders
     .filter((workOrder) => workOrder.status !== "已完成")
+    .filter((workOrder) => options.includePending || workOrder.creationStatus !== "pending")
     .slice()
     .sort((a, b) => String(a.order?.dueDate || "9999-12-31").localeCompare(String(b.order?.dueDate || "9999-12-31")));
 }
@@ -598,19 +616,20 @@ function visibleWorkOrders(data) {
 function workOrderTable(data, options = {}) {
   const canDelete = Boolean(options.allowDelete) && (canManageRole(state.user?.role) || data.permissions?.forceDeleteWorkOrders);
   const canEdit = Boolean(options.allowEdit) && data.permissions?.editOrders;
-  const workOrders = visibleWorkOrders(data);
+  const canConfirm = Boolean(options.allowConfirm) && data.permissions?.editOrders;
+  const workOrders = visibleWorkOrders(data, options);
   return `
     <section class="panel" style="margin-top:14px">
       <h3>生产进度看板</h3>
       <div class="table-wrap">
         <table class="work-order-table">
-          <thead><tr><th>工单</th><th>客户/产品/数量</th><th>创建时间</th><th>当前工序</th><th>交期</th><th>状态</th><th>进度</th><th>图纸</th><th>异常</th><th>备注</th>${canDelete || canEdit ? "<th>操作</th>" : ""}</tr></thead>
+          <thead><tr><th>工单</th><th>客户/产品/数量</th><th>创建时间</th><th>当前工序</th><th>交期</th><th>状态</th><th>进度</th><th>图纸</th><th>异常</th><th>备注</th>${canDelete || canEdit || canConfirm ? "<th>操作</th>" : ""}</tr></thead>
           <tbody>
             ${workOrders
               .map(
                 (w) => `
                   <tr>
-                    <td>${escapeHtml(w.workNo)}<br>${orderSourceBadge(w)}</td>
+                    <td>${escapeHtml(w.workNo)}<br>${options.productionBoard ? productionSourceBadge(w) : orderSourceBadge(w)}</td>
                     <td>${escapeHtml(w.customer?.name || "")}<br><span class="muted">${escapeHtml(w.productName)}</span><br><span class="muted">${escapeHtml(w.planQty)} ${workOrderQuantityUnit(w)}</span></td>
                     <td>${escapeHtml(formatDateTime(w.order?.createdAt || w.createdAt))}</td>
                     <td>${escapeHtml(w.currentProcess || "-")}</td>
@@ -620,7 +639,7 @@ function workOrderTable(data, options = {}) {
                     <td>${attachmentGroupButton(workOrderDrawings(data, w), `${w.workNo} ${w.productName}`)}</td>
                     <td>${w.hasException ? tag("异常") : tag("正常")}</td>
                     <td class="note-cell">${escapeHtml(w.order?.note || "-")}</td>
-                    ${canDelete || canEdit ? `<td><div class="actions">${canEdit ? `<button class="btn secondary compact" data-edit-order="${w.orderId}">编辑</button>` : ""}${canDelete ? `<button class="btn danger compact" data-delete-work-order="${w.id}">删除</button>` : ""}</div></td>` : ""}
+                    ${canDelete || canEdit || canConfirm ? `<td><div class="actions">${canEdit ? `<button class="btn secondary compact" data-edit-order="${w.orderId}">编辑</button>` : ""}${canConfirm && w.creationStatus === "pending" ? `<button class="btn compact" data-confirm-platform-order="${w.orderId}">确认创建</button>` : ""}${canDelete ? `<button class="btn danger compact" data-delete-work-order="${w.id}">删除</button>` : ""}</div></td>` : ""}
                   </tr>
                 `
               )
@@ -632,9 +651,14 @@ function workOrderTable(data, options = {}) {
   `;
 }
 
-function ordersPage(data) {
+function ordersPage(data, source = "all") {
+  const sourceValue = source === "all" ? "" : source;
+  const filteredWorkOrders = filterWorkOrdersBySource(data.workOrders, sourceValue, source === "platform" ? state.orderSourceChannel : "");
+  const pageData = { ...data, workOrders: filteredWorkOrders };
+  const channelFilter = source === "platform" ? `<label class="field"><span>平台渠道</span><select id="orderSourceChannel"><option value="">全部平台渠道</option>${Object.entries(sourceChannelLabels).map(([value, label]) => `<option value="${value}" ${state.orderSourceChannel === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>` : "";
   return `
     <div class="topbar"><h2>订单与工单</h2><button class="btn" data-action="showOrderForm">新建订单</button></div>
+    ${channelFilter}
     <section class="panel" id="orderForm" style="display:none;margin-bottom:14px">
       <h3>新建订单</h3>
       <div class="form-grid">
@@ -652,9 +676,21 @@ function ordersPage(data) {
       </div>
       <button class="btn" data-action="createOrder">保存订单并生成工单</button>
     </section>
-    ${workOrderTable(data, { allowDelete: true, allowEdit: true })}
+    ${workOrderTable(pageData, { allowDelete: true, allowEdit: true, allowConfirm: source === "platform", includePending: true })}
     ${orderEditModal(data)}
+    ${platformConfirmModal(data)}
   `;
+}
+
+function platformConfirmModal(data) {
+  const order = data.orders.find((item) => item.id === state.confirmingPlatformOrderId);
+  const workOrder = data.workOrders.find((item) => item.orderId === order?.id);
+  if (!order || !workOrder) return "";
+  return `<div class="dialog-backdrop" data-action="closePlatformConfirm"><section class="dialog" onclick="event.stopPropagation()">
+    <div class="topbar"><div><h3>确认创建平台工单</h3><p class="muted">${escapeHtml(order.orderNo)} / ${escapeHtml(order.productName)}</p></div><button class="btn secondary compact" data-action="closePlatformConfirm">关闭</button></div>
+    <div class="field wide"><span>选择工序</span><div class="checks">${activeTechProcesses(data).map((process) => `<label class="check-pill"><input type="checkbox" name="confirmProcess" value="${process.id}">${process.name}</label>`).join("")}</div></div>
+    <div class="actions"><button class="btn" data-action="submitPlatformConfirm">确认创建工单</button></div>
+  </section></div>`;
 }
 
 function orderEditModal(data) {
@@ -1153,7 +1189,6 @@ function adminShell() {
   const views = [
     ["dashboard", "生产总览"],
     ["customers", "客户资料"],
-    ["orders", "订单工单"],
     ["dispatch", "派工路线"],
     ["exceptions", "质检详情"],
     ["history", "历史查询"],
@@ -1165,7 +1200,9 @@ function adminShell() {
   const content = {
     dashboard: dashboard(data),
     customers: customersPage(data),
-    orders: ordersPage(data),
+    ordersAll: ordersPage(data, "all"),
+    ordersFactory: ordersPage(data, "factory"),
+    ordersPlatform: ordersPage(data, "platform"),
     dispatch: dispatchPage(data),
     exceptions: exceptionsPage(data),
     customerFeedback: data.permissions?.manageCustomerFeedback ? customerFeedbackPage(data) : dashboard(data),
@@ -1175,12 +1212,14 @@ function adminShell() {
     settings: settingsPage(data),
     mobile: mobileShell(true),
   }[state.view];
+  const pendingPlatformCount = data.workOrders.filter((workOrder) => workOrder.creationStatus === "pending" && orderSource(workOrder).origin === "platform").length;
+  const ordersNav = `<div class="nav-group"><span>订单工单</span><button class="${state.view === "ordersAll" ? "active" : ""}" data-view="ordersAll">全部订单</button><button class="${state.view === "ordersFactory" ? "active" : ""}" data-view="ordersFactory">工厂单</button><button class="${state.view === "ordersPlatform" ? "active" : ""}" data-view="ordersPlatform">平台单${pendingPlatformCount ? ` <b class="nav-count">${pendingPlatformCount}</b>` : ""}</button></div>`;
   return `
     <div class="app-shell">
       <aside class="side">
         <div class="brand">钣金工单云</div>
         <div class="user-chip"><strong>${escapeHtml(roleNames[state.user.role] || state.user.role)}</strong><span>${escapeHtml(state.user.name)}</span></div>
-        <nav class="nav">${views.map(([key, name]) => `<button class="${state.view === key ? "active" : ""}" data-view="${key}">${name}</button>`).join("")}<button data-action="logout">退出登录</button></nav>
+        <nav class="nav">${views.map(([key, name], index) => `${index === 2 ? ordersNav : ""}<button class="${state.view === key ? "active" : ""}" data-view="${key}">${name}</button>`).join("")}${views.length < 3 ? ordersNav : ""}<button data-action="logout">退出登录</button></nav>
       </aside>
       <main class="main">${content}</main>
     </div>
@@ -1588,6 +1627,14 @@ function bindEvents() {
       render();
     };
   });
+  document.querySelectorAll("[data-confirm-platform-order]").forEach((btn) => {
+    btn.onclick = () => { state.confirmingPlatformOrderId = btn.dataset.confirmPlatformOrder; render(); };
+  });
+  document.querySelectorAll("[data-dashboard-source]").forEach((btn) => {
+    btn.onclick = () => { state.dashboardSource = btn.dataset.dashboardSource; render(); };
+  });
+  const orderSourceChannel = el("orderSourceChannel");
+  if (orderSourceChannel) orderSourceChannel.onchange = () => { state.orderSourceChannel = orderSourceChannel.value; render(); };
   document.querySelectorAll("[data-history-order]").forEach((btn) => {
     btn.onclick = () => {
       state.historyOrderId = btn.dataset.historyOrder;
@@ -1805,12 +1852,12 @@ async function handleAction(action) {
     toast("已刷新");
   }
   if (action === "openTv") {
-    window.open("/tv.html", "_blank");
+    window.open(`/tv.html?source=${encodeURIComponent(state.dashboardSource)}`, "_blank");
   }
   if (action === "openMobileTv") {
     try {
       const data = await api("/api/tv-viewer-token");
-      window.open(`/tv.html?mobile=1&viewerToken=${encodeURIComponent(data.token)}`, "_blank");
+      window.open(`/tv.html?mobile=1&source=${encodeURIComponent(state.dashboardSource)}&viewerToken=${encodeURIComponent(data.token)}`, "_blank");
     } catch (err) {
       toast(err.message);
     }
@@ -1828,6 +1875,8 @@ async function handleAction(action) {
     state.editRemovedDrawingIds = [];
     render();
   }
+  if (action === "closePlatformConfirm") { state.confirmingPlatformOrderId = ""; render(); }
+  if (action === "submitPlatformConfirm") await submitPlatformConfirm();
   if (action === "closeHistoryDetail") { state.historyDetailId = ""; render(); }
   if (action === "closeHistoryOrder") { state.historyOrderId = ""; state.repeatOrderMode = false; state.repeatOrderConfirmOpen = false; render(); }
   if (action === "enableRepeatOrder") {
@@ -2120,6 +2169,20 @@ async function saveOrderEdit() {
     state.editingOrderId = "";
     state.editRemovedDrawingIds = [];
     toast("订单已更新");
+    await refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function submitPlatformConfirm() {
+  const orderId = state.confirmingPlatformOrderId;
+  const processIds = [...document.querySelectorAll('input[name="confirmProcess"]:checked')].map((input) => input.value);
+  if (!processIds.length) return toast("至少选择一道工序");
+  try {
+    await api("/api/platform-orders/confirm", { method: "POST", body: JSON.stringify({ orderId, processIds }) });
+    state.confirmingPlatformOrderId = "";
+    toast("平台工单已正式创建");
     await refresh();
   } catch (error) {
     toast(error.message);

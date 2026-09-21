@@ -35,6 +35,15 @@ function viewerToken() {
   return new URLSearchParams(location.search).get("viewerToken") || "";
 }
 
+function sourceView() {
+  const source = new URLSearchParams(location.search).get("source") || "all";
+  return ["factory", "platform"].includes(source) ? source : "all";
+}
+
+function sourceTabs() {
+  return `<div class="tv-source-tabs">${[["all", "全部订单"], ["factory", "工厂单"], ["platform", "平台单"]].map(([value, label]) => `<button type="button" data-tv-source="${value}" class="${sourceView() === value ? "active" : ""}">${label}</button>`).join("")}</div>`;
+}
+
 function esc(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -88,6 +97,7 @@ function metric(label, value, cls = "") {
 
 function orderBadges(order) {
   const badges = [];
+  if (order.order?.orderOrigin === "platform") badges.push({ text: "平台单", cls: "platform" });
   if (order.dueLevel === "overdue") badges.push({ text: "延期", cls: "delay" });
   else if (order.dueLevel === "urgent") badges.push({ text: "加急", cls: "urgent" });
   if (order.isRush) badges.push({ text: "急单", cls: "rush" });
@@ -505,7 +515,7 @@ function render(data, { preserveScroll = false } = {}) {
           <div class="subtitle">PRODUCTION CONTROL</div>
         </div>
       </div>
-      <div class="company-name">宁波未来机械</div>
+      <div class="company-name">宁波未来机械${sourceTabs()}</div>
       <div class="live"><span class="dot"></span><span>LIVE</span><span id="clock">${esc(clockText(data.generatedAt))}</span></div>
     </header>
   `;
@@ -603,15 +613,23 @@ function render(data, { preserveScroll = false } = {}) {
       restoreMobileRouteScroll(savedRouteScroll);
     });
   }
+  document.querySelectorAll("[data-tv-source]").forEach((button) => {
+    button.onclick = () => {
+      const params = new URLSearchParams(location.search);
+      params.set("source", button.dataset.tvSource);
+      history.replaceState(null, "", `${location.pathname}?${params}`);
+      load();
+    };
+  });
 }
 
 async function load() {
   try {
     const preserveScroll = Boolean(tvState.data) && isMobileTv();
     const token = viewerToken();
-    const endpoint = token
-      ? `/api/tv-dashboard?viewerToken=${encodeURIComponent(token)}`
-      : "/api/tv-dashboard";
+    const params = new URLSearchParams({ source: sourceView() });
+    if (token) params.set("viewerToken", token);
+    const endpoint = `/api/tv-dashboard?${params}`;
     const res = await fetch(endpoint);
     const data = await res.json();
     tvState.data = data;

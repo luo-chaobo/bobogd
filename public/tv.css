@@ -336,6 +336,11 @@ body.tv-carousel-mode .tv-orders-screen {
   text-shadow: 0 0 16px rgba(40, 215, 234, 0.45);
 }
 
+.tv-source-tabs { display:flex; justify-content:center; gap:8px; margin-top:4px; }
+.tv-source-tabs button { border:1px solid #1b6574; background:#092331; color:#8fb5c1; border-radius:4px; padding:3px 10px; cursor:pointer; }
+.tv-source-tabs button.active { border-color:#24d4e5; color:#fff; background:#0c4e5c; }
+.badge.platform { border-color:#2bdc8c; color:#2bdc8c; }
+
 .live {
   justify-self: end;
   display: flex;
