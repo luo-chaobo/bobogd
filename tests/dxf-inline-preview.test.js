@@ -2,12 +2,13 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const net = require("net");
 const { spawn } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
 const serverSource = fs.readFileSync(path.join(root, "server.js"), "utf8");
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bobogd-dxf-preview-"));
-const port = 31994;
+let port;
 let child;
 
 const sampleDxf = `0
@@ -111,12 +112,24 @@ async function waitForServer() {
   throw new Error("测试服务启动超时");
 }
 
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => resolve(address.port));
+    });
+  });
+}
+
 async function run() {
   assert.ok(
     serverSource.indexOf("dxfToSvg(fs.readFileSync(sourcePath") < serverSource.indexOf("for (const command of cadPreviewCommands"),
     "DXF 应优先使用内置预览，失败后才尝试外部命令"
   );
   seedDatabase();
+  port = await getFreePort();
   child = spawn(process.execPath, ["server.js"], {
     cwd: tempRoot,
     env: { ...process.env, PORT: String(port), CAD_PREVIEW_COMMAND: "missing-cad-command" },
