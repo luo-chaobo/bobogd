@@ -103,10 +103,11 @@ const roleNames = {
   powder_worker: "喷塑师傅",
   assembly_worker: "装配师傅",
   quality: "质检",
+  driver: "司机",
   admin: "管理员",
 };
 
-const roleOrder = ["owner", "manager", "office", "design_worker", "laser_worker", "bend_worker", "rivet_worker", "tap_worker", "weld_worker", "machining_worker", "polish_worker", "powder_worker", "assembly_worker", "quality", "worker", "admin"];
+const roleOrder = ["owner", "manager", "office", "driver", "design_worker", "laser_worker", "bend_worker", "rivet_worker", "tap_worker", "weld_worker", "machining_worker", "polish_worker", "powder_worker", "assembly_worker", "quality", "worker", "admin"];
 const assignableRoles = ["design_worker", "laser_worker", "bend_worker", "rivet_worker", "tap_worker", "weld_worker", "machining_worker", "polish_worker", "powder_worker", "assembly_worker", "quality", "worker"];
 const processRoleMap = {
   设计: "design_worker",
@@ -688,6 +689,15 @@ function platformConfirmModal(data) {
   if (!order || !workOrder) return "";
   return `<div class="dialog-backdrop" data-action="closePlatformConfirm"><section class="dialog" onclick="event.stopPropagation()">
     <div class="topbar"><div><h3>确认创建平台工单</h3><p class="muted">${escapeHtml(order.orderNo)} / ${escapeHtml(order.productName)}</p></div><button class="btn secondary compact" data-action="closePlatformConfirm">关闭</button></div>
+    <div class="form-grid">
+      <label class="field"><span>产品名称</span><input id="confirmProductName" value="${escapeHtml(order.productName || "")}"></label>
+      <label class="field"><span>数量</span><input id="confirmQuantity" type="number" min="1" step="1" value="${Number(order.quantity || 1)}"></label>
+      <label class="field"><span>交期</span><input id="confirmDueDate" type="date" value="${escapeHtml(order.dueDate || "")}"></label>
+      <label class="field"><span>优先级</span><select id="confirmPriority"><option ${order.priority !== "急单" ? "selected" : ""}>普通</option><option ${order.priority === "急单" ? "selected" : ""}>急单</option></select></label>
+      <label class="field"><span>配送地区</span><input id="confirmRegion" value="${escapeHtml(order.region || "")}" placeholder="省 / 市 / 区"></label>
+      <label class="field"><span>详细配送地址</span><input id="confirmDeliveryAddress" value="${escapeHtml(order.deliveryAddress || "")}" placeholder="缺少地址将不能进入配送池"></label>
+      <label class="field wide"><span>备注</span><textarea id="confirmNote">${escapeHtml(order.note || "")}</textarea></label>
+    </div>
     <div class="field wide"><span>选择工序</span><div class="checks">${activeTechProcesses(data).map((process) => `<label class="check-pill"><input type="checkbox" name="confirmProcess" value="${process.id}">${process.name}</label>`).join("")}</div></div>
     <div class="actions"><button class="btn" data-action="submitPlatformConfirm">确认创建工单</button></div>
   </section></div>`;
@@ -1184,8 +1194,21 @@ function settingsPage(data) {
   `;
 }
 
+function deliveriesPage(data) {
+  const labels = { waiting: "待配送", delivering: "配送中", delivered: "已送达", legacy_shipped: "旧数据已发货待确认" };
+  const pureDriver = userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver";
+  const items = (data.deliveries || []).filter((delivery) => !pureDriver || delivery.driverId === state.user.id || delivery.status === "waiting").map((delivery) => {
+    const order = data.orders.find((item) => item.id === delivery.orderId) || {};
+    const driver = data.users.find((item) => item.id === delivery.driverId) || {};
+    const proofs = (delivery.proofAttachmentIds || []).map((attachmentId) => data.attachments.find((attachment) => attachment.id === attachmentId)).filter(Boolean);
+    return `<tr><td>${escapeHtml(order.orderNo || delivery.orderId)}<br><span class="muted">${escapeHtml(order.productName || "")}</span></td><td>${escapeHtml(delivery.addressSnapshot?.region || order.region || "地址待补全")}<br>${escapeHtml(delivery.addressSnapshot?.deliveryAddress || order.deliveryAddress || "")}</td><td>${escapeHtml(labels[delivery.status] || delivery.status)}</td><td>${escapeHtml(driver.name || "-")}</td><td>${escapeHtml(formatDateTime(delivery.startedAt || ""))}</td><td>${escapeHtml(formatDateTime(delivery.deliveredAt || ""))}</td><td>${proofs.map((proof, index) => `<a href="${escapeHtml(proof.url)}" target="_blank" rel="noopener">照片${index + 1}</a>`).join(" ") || "-"}</td><td>${["delivering", "delivered"].includes(delivery.status) ? `<button class="btn secondary compact" data-release-delivery="${order.id}">${delivery.status === "delivered" ? "纠正状态" : "退回待配送"}</button>` : "-"}</td></tr>`;
+  }).join("");
+  return `<div class="topbar"><h2>配送管理</h2><button class="btn secondary" data-action="refresh">刷新</button></div><section class="panel"><div class="table-wrap"><table><thead><tr><th>订单</th><th>配送地址</th><th>状态</th><th>司机</th><th>出发时间</th><th>送达时间</th><th>送达凭证</th><th>操作</th></tr></thead><tbody>${items || `<tr><td colspan="8" class="muted">暂无配送记录</td></tr>`}</tbody></table></div></section>`;
+}
+
 function adminShell() {
   const data = state.data;
+  const pureDriver = userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver";
   const views = [
     ["dashboard", "生产总览"],
     ["customers", "客户资料"],
@@ -1195,8 +1218,10 @@ function adminShell() {
     ["reports", "基础报表"],
     ["settings", "基础设置"],
   ];
+  if (pureDriver) views.splice(0, views.length, ["deliveries", "配送任务"]);
   if (data.permissions?.manageCustomerFeedback) views.splice(5, 0, ["customerFeedback", "客户反馈"]);
   if (data.permissions?.viewAuditLogs) views.splice(views.length - 1, 0, ["auditLogs", "操作日志"]);
+  if (!pureDriver && data.permissions?.manageDeliveries) views.splice(3, 0, ["deliveries", "配送管理"]);
   const content = {
     dashboard: dashboard(data),
     customers: customersPage(data),
@@ -1210,16 +1235,17 @@ function adminShell() {
     reports: reportsPage(data),
     auditLogs: auditLogsPage(data),
     settings: settingsPage(data),
+    deliveries: deliveriesPage(data),
     mobile: mobileShell(true),
   }[state.view];
   const pendingPlatformCount = data.workOrders.filter((workOrder) => workOrder.creationStatus === "pending" && orderSource(workOrder).origin === "platform").length;
-  const ordersNav = `<div class="nav-group"><span>订单工单</span><button class="${state.view === "ordersAll" ? "active" : ""}" data-view="ordersAll">全部订单</button><button class="${state.view === "ordersFactory" ? "active" : ""}" data-view="ordersFactory">工厂单</button><button class="${state.view === "ordersPlatform" ? "active" : ""}" data-view="ordersPlatform">平台单${pendingPlatformCount ? ` <b class="nav-count">${pendingPlatformCount}</b>` : ""}</button></div>`;
+  const ordersNav = pureDriver ? "" : `<div class="nav-group"><span>订单工单</span><button class="${state.view === "ordersAll" ? "active" : ""}" data-view="ordersAll">全部订单</button><button class="${state.view === "ordersFactory" ? "active" : ""}" data-view="ordersFactory">工厂单</button><button class="${state.view === "ordersPlatform" ? "active" : ""}" data-view="ordersPlatform">平台单${pendingPlatformCount ? ` <b class="nav-count">${pendingPlatformCount}</b>` : ""}</button></div>`;
   return `
     <div class="app-shell">
       <aside class="side">
         <div class="brand">钣金工单云</div>
         <div class="user-chip"><strong>${escapeHtml(roleNames[state.user.role] || state.user.role)}</strong><span>${escapeHtml(state.user.name)}</span></div>
-        <nav class="nav">${views.map(([key, name], index) => `${index === 2 ? ordersNav : ""}<button class="${state.view === key ? "active" : ""}" data-view="${key}">${name}</button>`).join("")}${views.length < 3 ? ordersNav : ""}<button data-action="logout">退出登录</button></nav>
+        <nav class="nav">${views.map(([key, name], index) => `${!pureDriver && index === 2 ? ordersNav : ""}<button class="${state.view === key ? "active" : ""}" data-view="${key}">${name}</button>`).join("")}${!pureDriver && views.length < 3 ? ordersNav : ""}<button data-action="logout">退出登录</button></nav>
       </aside>
       <main class="main">${content}</main>
     </div>
@@ -1433,6 +1459,7 @@ function render() {
   if (isShopWorkerRole(state.user.role) && state.view !== "mobile") {
     state.view = "mobile";
   }
+  if (userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver") state.view = "deliveries";
   root.innerHTML = `${state.view === "mobile" ? mobileShell() : adminShell()}${filePreviewModal()}`;
   bindEvents();
   if (state.view !== "mobile") activateSortableTables();
@@ -1519,7 +1546,8 @@ function bindLogin() {
       const data = await api("/api/login", { method: "POST", body: JSON.stringify({ phone: el("phone").value, password: el("password").value }) });
       state.user = data.user;
       localStorage.setItem("work_user", JSON.stringify(state.user));
-      state.view = isShopWorkerRole(state.user.role) ? "mobile" : "dashboard";
+      const pureDriver = userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver";
+      state.view = pureDriver ? "deliveries" : isShopWorkerRole(state.user.role) ? "mobile" : "dashboard";
       await refresh();
     } catch (err) {
       toast(err.message);
@@ -1629,6 +1657,19 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-confirm-platform-order]").forEach((btn) => {
     btn.onclick = () => { state.confirmingPlatformOrderId = btn.dataset.confirmPlatformOrder; render(); };
+  });
+  document.querySelectorAll("[data-release-delivery]").forEach((btn) => {
+    btn.onclick = async () => {
+      const reason = window.prompt("退回原因（管理者纠正已送达状态时必填）", "");
+      if (reason === null) return;
+      try {
+        await api("/api/deliveries/release", { method: "POST", body: JSON.stringify({ orderId: btn.dataset.releaseDelivery, reason: reason.trim() }) });
+        toast("配送状态已退回");
+        await refresh();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
   });
   document.querySelectorAll("[data-dashboard-source]").forEach((btn) => {
     btn.onclick = () => { state.dashboardSource = btn.dataset.dashboardSource; render(); };
@@ -1852,7 +1893,8 @@ async function handleAction(action) {
     toast("已刷新");
   }
   if (action === "openTv") {
-    window.open(`/tv.html?source=${encodeURIComponent(state.dashboardSource)}`, "_blank");
+    if (state.dashboardSource === "all") window.open("/tv.html", "_blank");
+    else window.open(`/tv.html?source=${encodeURIComponent(state.dashboardSource)}`, "_blank");
   }
   if (action === "openMobileTv") {
     try {
@@ -2180,7 +2222,17 @@ async function submitPlatformConfirm() {
   const processIds = [...document.querySelectorAll('input[name="confirmProcess"]:checked')].map((input) => input.value);
   if (!processIds.length) return toast("至少选择一道工序");
   try {
-    await api("/api/platform-orders/confirm", { method: "POST", body: JSON.stringify({ orderId, processIds }) });
+    await api("/api/platform-orders/confirm", { method: "POST", body: JSON.stringify({
+      orderId,
+      processIds,
+      productName: el("confirmProductName").value.trim(),
+      quantity: Number(el("confirmQuantity").value),
+      dueDate: el("confirmDueDate").value,
+      priority: el("confirmPriority").value,
+      region: el("confirmRegion").value.trim(),
+      deliveryAddress: el("confirmDeliveryAddress").value.trim(),
+      note: el("confirmNote").value.trim(),
+    }) });
     state.confirmingPlatformOrderId = "";
     toast("平台工单已正式创建");
     await refresh();

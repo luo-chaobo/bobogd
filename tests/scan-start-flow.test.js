@@ -2,7 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "miniprogram", "pages", "tasks", "tasks.js"), "utf8");
+const source = fs.readFileSync(path.join(__dirname, "..", "miniprogram", "pages", "tasks", "tasks.js"), "utf8").replace(/\r\n/g, "\n");
 
 const startMatch = source.match(/async startScannedRoute\(routeId\) \{([\s\S]*?)\n  \},\n  openScannedReport/);
 assert.ok(startMatch, "startScannedRoute 方法必须存在");

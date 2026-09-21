@@ -4,7 +4,7 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const tvSource = fs.readFileSync(path.join(root, "public", "tv.js"), "utf8");
-const tvStyles = fs.readFileSync(path.join(root, "public", "tv.css"), "utf8");
+const tvStyles = fs.readFileSync(path.join(root, "public", "tv.css"), "utf8").replace(/\r\n/g, "\n");
 const appSource = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
 
 assert.ok(tvSource.includes("plannedRange"), "TV must render planned date ranges");

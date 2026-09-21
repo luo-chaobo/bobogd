@@ -2,7 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "miniprogram", "pages", "report", "report.js"), "utf8");
+const source = fs.readFileSync(path.join(__dirname, "..", "miniprogram", "pages", "report", "report.js"), "utf8").replace(/\r\n/g, "\n");
 const startMatch = source.match(/async startProduction\(routeId\)[\s\S]*?\n  \},\n  async submit/);
 
 assert.ok(source.includes("工单：${workOrder.workNo || \"\"}"), "外部扫码待开始弹窗必须显示工单号");

@@ -125,10 +125,14 @@ async function run() {
   const pendingTv = await (await fetch(`http://127.0.0.1:${port}/api/tv-dashboard?source=platform`)).json();
   assert.deepStrictEqual(pendingTv.activeOrders, []);
 
-  const confirmed = await confirmPlatformOrder({ orderId: created.data.order.id, processIds: ["p1"] });
+  const confirmed = await confirmPlatformOrder({ orderId: created.data.order.id, processIds: ["p1"], productName: "304 壳体", quantity: 6, dueDate: "2026-10-15", priority: "急单", note: "确认后生产", region: "浙江省 宁波市", deliveryAddress: "更新后的地址" });
   assert.strictEqual(confirmed.status, 200);
   assert.strictEqual(confirmed.data.workOrder.creationStatus, "confirmed");
   assert.strictEqual(confirmed.data.routes.length, 1);
+  assert.deepStrictEqual(
+    { productName: confirmed.data.order.productName, quantity: confirmed.data.order.quantity, dueDate: confirmed.data.order.dueDate, priority: confirmed.data.order.priority, region: confirmed.data.order.region, deliveryAddress: confirmed.data.order.deliveryAddress, planQty: confirmed.data.workOrder.planQty },
+    { productName: "304 壳体", quantity: 6, dueDate: "2026-10-15", priority: "急单", region: "浙江省 宁波市", deliveryAddress: "更新后的地址", planQty: 6 }
+  );
   assert.strictEqual((await confirmPlatformOrder({ orderId: created.data.order.id, processIds: ["p1"] })).status, 409);
   const confirmedTv = await (await fetch(`http://127.0.0.1:${port}/api/tv-dashboard?source=platform`)).json();
   assert.deepStrictEqual(confirmedTv.activeOrders.map((item) => item.id), [created.data.workOrder.id]);
@@ -150,6 +154,13 @@ async function run() {
   assert.deepStrictEqual(sameOrder.map((item) => item.status).sort((a, b) => a - b), [200, 201]);
   assert.strictEqual(sameOrder[0].data.order.id, sameOrder[1].data.order.id);
   assert.strictEqual(sameOrder[0].data.workOrder.id, sameOrder[1].data.workOrder.id);
+
+  const confirmRaceCreated = await external({ ...body, externalOrderNumber: "CONFIRM-RACE" }, "nonce-confirm-race");
+  const confirmRace = await Promise.all([
+    confirmPlatformOrder({ orderId: confirmRaceCreated.data.order.id, processIds: ["p1"] }),
+    confirmPlatformOrder({ orderId: confirmRaceCreated.data.order.id, processIds: ["p1"] }),
+  ]);
+  assert.deepStrictEqual(confirmRace.map((item) => item.status).sort((a, b) => a - b), [200, 409]);
 
   const repeated = await external(body, "nonce-repeat");
   assert.strictEqual(repeated.status, 200);

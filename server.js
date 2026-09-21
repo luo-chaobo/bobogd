@@ -80,6 +80,7 @@ const roles = {
   powder_worker: "喷塑师傅",
   assembly_worker: "装配师傅",
   quality: "质检",
+  driver: "司机",
   admin: "管理员",
 };
 
@@ -109,6 +110,7 @@ const rolePriority = {
   manager: 80,
   office: 70,
   quality: 30,
+  driver: 40,
   design_worker: 20,
   laser_worker: 20,
   bend_worker: 20,
@@ -184,7 +186,7 @@ function normalizeRouteSchedule(startValue, endValue) {
 }
 
 function reportSchedule(route, createdAt) {
-  const reportDate = String(createdAt || "").slice(0, 10);
+  const reportDate = shanghaiDateKey(createdAt);
   const plannedStartDate = route.plannedStartDate || "";
   const plannedEndDate = route.plannedEndDate || "";
   if (!plannedStartDate || !plannedEndDate) {
@@ -493,6 +495,20 @@ async function readDb() {
       order.quantityUnit = quantityUnit;
       changed = true;
     }
+    if (source.orderOrigin === "platform") {
+      const externalSnapshot = {
+        externalQuantity: Number(order.externalQuantity ?? order.quantity),
+        externalExpectedDate: String(order.externalExpectedDate ?? order.dueDate ?? ""),
+        externalRegion: String(order.externalRegion ?? order.region ?? ""),
+        externalDeliveryAddress: String(order.externalDeliveryAddress ?? order.deliveryAddress ?? ""),
+      };
+      for (const [key, value] of Object.entries(externalSnapshot)) {
+        if (order[key] === undefined) {
+          order[key] = value;
+          changed = true;
+        }
+      }
+    }
   });
   Object.entries(defaultSettings).forEach(([key, value]) => {
     if (db.settings[key] === undefined) {
@@ -627,6 +643,26 @@ async function readDb() {
       workOrder.currentProcess = currentProcess;
       changed = true;
     }
+  });
+  db.orders.forEach((order) => {
+    if (normalizedOrderSource(order).orderOrigin !== "platform") return;
+    if (db.deliveries.some((delivery) => delivery.orderId === order.id)) return;
+    const workOrders = db.workOrders.filter((workOrder) => workOrder.orderId === order.id);
+    if (!workOrders.length || workOrders.some((workOrder) => workOrder.creationStatus === "pending" || workOrder.status !== "已完成")) return;
+    db.deliveries.push({
+      id: id("delivery"),
+      orderId: order.id,
+      tripId: "",
+      driverId: order.shippedBy || "",
+      status: order.shippedAt ? "legacy_shipped" : "waiting",
+      addressSnapshot: { region: String(order.region || ""), deliveryAddress: String(order.deliveryAddress || "") },
+      startedAt: order.shippedAt || "",
+      deliveredAt: "",
+      proofAttachmentIds: [],
+      note: "",
+      createdAt: order.shippedAt || new Date().toISOString(),
+    });
+    changed = true;
   });
   db.processes.forEach((process, index) => {
     const standardIndex = defaultProcesses.indexOf(process.name);
@@ -823,13 +859,13 @@ function externalOrderMatches(order, input) {
     && order.externalOrderNumber === input.externalOrderNumber
     && order.externalCustomer === input.customer
     && order.externalPhone === input.phone
-    && Number(order.quantity) === input.quantity
-    && order.dueDate === input.expectedDate
+    && Number(order.externalQuantity ?? order.quantity) === input.quantity
+    && String(order.externalExpectedDate ?? order.dueDate) === input.expectedDate
     && order.externalDescription === input.description
     && order.material === input.material
     && order.dimensions === input.dimensions
-    && String(order.region || "") === input.region
-    && String(order.deliveryAddress || "") === input.deliveryAddress;
+    && String(order.externalRegion ?? order.region ?? "") === input.region
+    && String(order.externalDeliveryAddress ?? order.deliveryAddress ?? "") === input.deliveryAddress;
 }
 
 function workOrderMatchesSource(workOrder, source = "all") {
@@ -866,6 +902,20 @@ let externalOrderWrite = Promise.resolve();
 function serializeExternalOrder(task) {
   const result = externalOrderWrite.then(task, task);
   externalOrderWrite = result.catch(() => {});
+  return result;
+}
+
+let deliveryWrite = Promise.resolve();
+function serializeDelivery(task) {
+  const result = deliveryWrite.then(task, task);
+  deliveryWrite = result.catch(() => {});
+  return result;
+}
+
+let platformOrderWrite = Promise.resolve();
+function serializePlatformOrder(task) {
+  const result = platformOrderWrite.then(task, task);
+  platformOrderWrite = result.catch(() => {});
   return result;
 }
 
@@ -910,6 +960,35 @@ function queuePlatformShipment(db, order, workOrder, occurredAt) {
       eventId, sequence: order.platformWebhookSequence, workOrderId: workOrder.id,
       externalOrderNumber: source.externalOrderNumber, type: "shipment.shipped", occurredAt,
       allProcessesCompleted: true,
+    },
+  };
+  db.platformWebhookEvents.push(queuedEvent);
+  return queuedEvent;
+}
+
+function queuePlatformDeliveryCompleted(db, order, workOrder, delivery) {
+  const source = normalizedOrderSource(order);
+  if (source.orderOrigin !== "platform" || !source.externalOrderNumber) return null;
+  const eventId = `bobo-delivery-${order.id}`;
+  const existing = db.platformWebhookEvents.find((item) => item.event.eventId === eventId);
+  if (existing) return existing;
+  order.platformWebhookSequence = Number(order.platformWebhookSequence || 0) + 1;
+  const queuedEvent = {
+    status: "pending", attempts: 0, nextAttemptAt: "", lastError: "",
+    event: {
+      eventId,
+      sequence: order.platformWebhookSequence,
+      workOrderId: workOrder.id,
+      externalOrderNumber: source.externalOrderNumber,
+      type: "delivery.completed",
+      occurredAt: delivery.deliveredAt,
+      allProcessesCompleted: true,
+      delivery: {
+        id: delivery.id,
+        tripId: delivery.tripId,
+        driverId: delivery.driverId,
+        deliveredAt: delivery.deliveredAt,
+      },
     },
   };
   db.platformWebhookEvents.push(queuedEvent);
@@ -1721,6 +1800,36 @@ function canSupervise(userOrRole) {
   return getUserRoles(userOrRole).some((role) => ["owner", "manager", "admin"].includes(role));
 }
 
+function canDrive(user) {
+  return Boolean(user && user.active !== false && (userHasRole(user, "driver") || canSupervise(user)));
+}
+
+function completedOrderWorkOrders(db, orderId) {
+  const workOrders = db.workOrders.filter((workOrder) => workOrder.orderId === orderId);
+  return workOrders.length > 0
+    && workOrders.every((workOrder) => workOrder.creationStatus !== "pending" && workOrder.status === "已完成");
+}
+
+function deliveryAvailability(db, order) {
+  if (!order || normalizedOrderSource(order).orderOrigin !== "platform") return { ok: false, error: "仅平台订单可以配送" };
+  if (!completedOrderWorkOrders(db, order.id)) return { ok: false, error: "订单尚未完成生产" };
+  if (!String(order.region || "").trim() || !String(order.deliveryAddress || "").trim()) return { ok: false, error: "订单缺少完整配送地址" };
+  const delivery = db.deliveries.find((item) => item.orderId === order.id);
+  if (delivery && delivery.status !== "waiting") return { ok: false, error: "订单已被领取或已完成配送" };
+  return { ok: true, delivery };
+}
+
+function deliveryOrderView(db, order) {
+  const customer = db.customers.find((item) => item.id === order.customerId) || {};
+  const delivery = db.deliveries.find((item) => item.orderId === order.id) || null;
+  return {
+    ...order,
+    customerName: customer.name || order.externalCustomer || "",
+    customerPhone: customer.phone || order.externalPhone || "",
+    delivery,
+  };
+}
+
 function canForceDeleteWorkOrders(user) {
   return Boolean(user && user.active && user.phone === ULTIMATE_WORK_ORDER_ADMIN_PHONE);
 }
@@ -1744,6 +1853,7 @@ function userPermissions(user) {
     viewBoardCustomer: canViewRestrictedBoard(user),
     manageCustomerFeedback: canViewRestrictedBoard(user),
     manageOrderFulfillment: canViewRestrictedBoard(user),
+    manageDeliveries: canDrive(user),
   };
 }
 
@@ -2118,7 +2228,7 @@ async function handleApi(req, res) {
           currentDb.customers.push(customer);
         }
         const createdAt = new Date().toISOString();
-        const order = { id: id("o"), orderNo: input.externalOrderNumber, customerId: customer.id, productName: input.material || input.description || "非标钣金件", drawingNo: "", quantity: input.quantity, quantityUnit: "件", dueDate: input.expectedDate, priority: "普通", status: "待正式创建", note: input.description, createdAt, orderOrigin: "platform", sourceChannel: input.sourceChannel, externalOrderNumber: input.externalOrderNumber, externalCustomer: input.customer, externalPhone: input.phone, externalDescription: input.description, material: input.material, dimensions: input.dimensions, region: input.region, deliveryAddress: input.deliveryAddress };
+        const order = { id: id("o"), orderNo: input.externalOrderNumber, customerId: customer.id, productName: input.material || input.description || "非标钣金件", drawingNo: "", quantity: input.quantity, quantityUnit: "件", dueDate: input.expectedDate, priority: "普通", status: "待正式创建", note: input.description, createdAt, orderOrigin: "platform", sourceChannel: input.sourceChannel, externalOrderNumber: input.externalOrderNumber, externalCustomer: input.customer, externalPhone: input.phone, externalDescription: input.description, externalQuantity: input.quantity, externalExpectedDate: input.expectedDate, externalRegion: input.region, externalDeliveryAddress: input.deliveryAddress, material: input.material, dimensions: input.dimensions, region: input.region, deliveryAddress: input.deliveryAddress };
         const workOrder = { id: id("w"), workNo: input.externalOrderNumber, orderId: order.id, productName: order.productName, planQty: input.quantity, status: "待排产", creationStatus: "pending", currentProcess: "", assigneeId: "", qrToken: id("qr"), createdAt };
         currentDb.orders.push(order);
         currentDb.workOrders.push(workOrder);
@@ -2318,6 +2428,155 @@ async function handleApi(req, res) {
     const user = currentUser(req, db);
     if (!user) return send(res, 401, { error: "请先登录" });
 
+    if (req.method === "GET" && url.pathname === "/api/deliveries/available") {
+      if (!canDrive(user)) return send(res, 403, { error: "无权查看配送任务" });
+      const region = String(url.searchParams.get("region") || "").trim().toLowerCase();
+      const orders = db.orders
+        .filter((order) => deliveryAvailability(db, order).ok)
+        .filter((order) => !region || `${order.region || ""} ${order.deliveryAddress || ""}`.toLowerCase().includes(region))
+        .sort((a, b) => `${a.region || ""}${a.deliveryAddress || ""}${a.orderNo || ""}`.localeCompare(`${b.region || ""}${b.deliveryAddress || ""}${b.orderNo || ""}`, "zh-CN"))
+        .map((order) => deliveryOrderView(db, order));
+      return send(res, 200, { orders });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/deliveries/my") {
+      if (!canDrive(user)) return send(res, 403, { error: "无权查看配送任务" });
+      const deliveries = db.deliveries
+        .filter((delivery) => canSupervise(user) || delivery.driverId === user.id)
+        .filter((delivery) => ["delivering", "delivered"].includes(delivery.status))
+        .map((delivery) => ({
+          ...delivery,
+          order: deliveryOrderView(db, db.orders.find((order) => order.id === delivery.orderId) || {}),
+          proofAttachments: (delivery.proofAttachmentIds || []).map((attachmentId) => db.attachments.find((attachment) => attachment.id === attachmentId)).filter(Boolean),
+        }))
+        .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+      return send(res, 200, { deliveries });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/delivery-trips/start") {
+      if (!canDrive(user)) return send(res, 403, { error: "无权领取配送任务" });
+      const body = await parseBody(req);
+      const orderIds = [...new Set((Array.isArray(body.orderIds) ? body.orderIds : []).map(String).filter(Boolean))];
+      if (!orderIds.length) return send(res, 400, { error: "请至少选择一个配送订单" });
+      const result = await serializeDelivery(async () => {
+        const currentDb = await readDb();
+        const orders = orderIds.map((orderId) => currentDb.orders.find((order) => order.id === orderId));
+        if (orders.some((order) => !order)) return { status: 404, data: { error: "配送订单不存在" } };
+        const invalid = orders.map((order) => deliveryAvailability(currentDb, order)).find((item) => !item.ok);
+        if (invalid) return { status: 409, data: { error: invalid.error } };
+        const startedAt = new Date().toISOString();
+        const trip = { id: id("trip"), driverId: user.id, status: "delivering", orderIds, startedAt, completedAt: "", createdAt: startedAt };
+        const deliveries = orders.map((order) => {
+          const existing = currentDb.deliveries.find((item) => item.orderId === order.id);
+          const delivery = existing || { id: id("delivery"), orderId: order.id, proofAttachmentIds: [], note: "", createdAt: startedAt };
+          Object.assign(delivery, {
+            tripId: trip.id,
+            driverId: user.id,
+            status: "delivering",
+            addressSnapshot: { region: String(order.region || ""), deliveryAddress: String(order.deliveryAddress || "") },
+            startedAt,
+            deliveredAt: "",
+          });
+          if (!existing) currentDb.deliveries.push(delivery);
+          const workOrder = currentDb.workOrders.find((item) => item.orderId === order.id);
+          order.shippedAt ||= startedAt;
+          order.shippedBy ||= user.id;
+          order.status = orderFulfillmentStatus(workOrder, order);
+          queuePlatformShipment(currentDb, order, workOrder, order.shippedAt);
+          appendAudit(currentDb, user, "delivery-start", "delivery", delivery.id, { orderId: order.id, tripId: trip.id });
+          return delivery;
+        });
+        currentDb.deliveryTrips.push(trip);
+        await writeDb(currentDb);
+        return { status: 201, data: { trip, delivery: deliveries[0], deliveries } };
+      });
+      if (result.status === 201) setTimeout(() => void processPlatformWebhooks(), 50);
+      return send(res, result.status, result.data);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/deliveries/complete") {
+      if (!canDrive(user)) return send(res, 403, { error: "无权确认送达" });
+      const body = await parseBody(req);
+      const photos = Array.isArray(body.photos) ? body.photos : [];
+      if (photos.length < 1 || photos.length > 3) return send(res, 400, { error: "送达照片必须为 1 至 3 张" });
+      if (photos.some((photo) => !/^data:image\/(?:png|jpe?g|gif);base64,/.test(String(photo.dataUrl || "")))) return send(res, 400, { error: "送达照片格式无效" });
+      const result = await serializeDelivery(async () => {
+        const currentDb = await readDb();
+        const delivery = currentDb.deliveries.find((item) => item.orderId === String(body.orderId || ""));
+        if (!delivery) return { status: 404, data: { error: "配送记录不存在" } };
+        if (delivery.status !== "delivering") return { status: 409, data: { error: "订单不在配送中" } };
+        if (!canSupervise(user) && delivery.driverId !== user.id) return { status: 403, data: { error: "该订单由其他司机配送" } };
+        const order = currentDb.orders.find((item) => item.id === delivery.orderId);
+        const workOrder = currentDb.workOrders.find((item) => item.orderId === order?.id);
+        if (!order || !workOrder) return { status: 404, data: { error: "订单工单不存在" } };
+        const createdAt = new Date().toISOString();
+        const attachments = photos.map((photo) => {
+          const saved = saveDataUrlFile(photo, { prefix: "delivery" });
+          if (saved.error) throw new Error(saved.error);
+          return { ...saved, id: id("att"), attachmentType: "delivery-proof", orderId: order.id, deliveryId: delivery.id, uploaderId: user.id, createdAt };
+        });
+        currentDb.attachments.push(...attachments);
+        delivery.status = "delivered";
+        delivery.deliveredAt = createdAt;
+        delivery.deliveredBy = user.id;
+        delivery.note = String(body.note || "").trim();
+        delivery.proofAttachmentIds = attachments.map((attachment) => attachment.id);
+        order.deliveredAt = createdAt;
+        order.deliveredBy = user.id;
+        const tripDeliveries = currentDb.deliveries.filter((item) => item.tripId === delivery.tripId);
+        const trip = currentDb.deliveryTrips.find((item) => item.id === delivery.tripId);
+        if (trip && tripDeliveries.every((item) => item.id === delivery.id || item.status === "delivered")) {
+          trip.status = "completed";
+          trip.completedAt = createdAt;
+        }
+        const webhookEvent = queuePlatformDeliveryCompleted(currentDb, order, workOrder, delivery);
+        appendAudit(currentDb, user, "delivery-complete", "delivery", delivery.id, { orderId: order.id, tripId: delivery.tripId, proofAttachmentIds: delivery.proofAttachmentIds, note: delivery.note });
+        await writeDb(currentDb);
+        return { status: 200, data: { ok: true, delivery, trip, proofAttachments: attachments, platformSync: webhookEvent?.status || "not-applicable" } };
+      }).catch((error) => ({ status: 400, data: { error: error.message } }));
+      if (result.status === 200) setTimeout(() => void processPlatformWebhooks(), 50);
+      return send(res, result.status, result.data);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/deliveries/release") {
+      if (!canDrive(user)) return send(res, 403, { error: "无权退回配送任务" });
+      const body = await parseBody(req);
+      const reason = String(body.reason || "").trim();
+      const result = await serializeDelivery(async () => {
+        const currentDb = await readDb();
+        const delivery = currentDb.deliveries.find((item) => item.orderId === String(body.orderId || ""));
+        if (!delivery) return { status: 404, data: { error: "配送记录不存在" } };
+        if (delivery.status === "delivered" && !canSupervise(user)) return { status: 409, data: { error: "司机不能撤销已送达记录" } };
+        if (!["delivering", "delivered"].includes(delivery.status)) return { status: 409, data: { error: "配送记录当前不能退回" } };
+        if (!canSupervise(user) && delivery.driverId !== user.id) return { status: 403, data: { error: "该订单由其他司机配送" } };
+        if (canSupervise(user) && !reason) return { status: 400, data: { error: "管理者纠正状态必须填写原因" } };
+        const before = { status: delivery.status, driverId: delivery.driverId, deliveredAt: delivery.deliveredAt || "" };
+        const previousTripId = delivery.tripId;
+        delivery.status = "waiting";
+        delivery.tripId = "";
+        delivery.driverId = "";
+        delivery.startedAt = "";
+        delivery.deliveredAt = "";
+        delivery.deliveredBy = "";
+        delivery.correctedAt = new Date().toISOString();
+        delivery.correctionReason = reason;
+        const order = currentDb.orders.find((item) => item.id === delivery.orderId);
+        if (order) {
+          order.deliveredAt = "";
+          order.deliveredBy = "";
+        }
+        const trip = currentDb.deliveryTrips.find((item) => item.id === previousTripId);
+        if (trip && !currentDb.deliveries.some((item) => item.tripId === trip.id && item.status === "delivering")) {
+          trip.status = "completed";
+          trip.completedAt ||= new Date().toISOString();
+        }
+        appendAudit(currentDb, user, "delivery-release", "delivery", delivery.id, { orderId: delivery.orderId, before, reason });
+        await writeDb(currentDb);
+        return { status: 200, data: { ok: true, delivery } };
+      });
+      return send(res, result.status, result.data);
+    }
+
     if (req.method === "GET" && url.pathname === "/api/reports/management-export") {
       if (!canManage(user)) return send(res, 403, { error: "无权导出管理分析" });
       const {
@@ -2472,30 +2731,53 @@ async function handleApi(req, res) {
     if (req.method === "POST" && url.pathname === "/api/platform-orders/confirm") {
       if (!canSupervise(user)) return send(res, 403, { error: "无权确认平台订单" });
       const body = await parseBody(req);
-      const order = db.orders.find((item) => item.id === body.orderId);
-      const workOrder = db.workOrders.find((item) => item.orderId === order?.id);
-      if (!order || !workOrder || normalizedOrderSource(order).orderOrigin !== "platform") return send(res, 404, { error: "平台订单不存在" });
-      if (workOrder.creationStatus !== "pending") return send(res, 409, { error: "平台订单已正式创建" });
       if (!Array.isArray(body.processIds) || !body.processIds.length) return send(res, 400, { error: "至少选择一道工序" });
       const processIds = [...new Set(body.processIds.map(String))];
-      const selectedProcesses = processIds.map((processId) => db.processes.find((process) => process.id === processId));
-      if (selectedProcesses.some((process) => !process || process.active === false)) return send(res, 400, { error: "所选工序不存在或已停用" });
-      if (!selectedProcesses.some((process) => process.name !== "质检")) return send(res, 400, { error: "质检前至少选择一道生产工序" });
-      selectedProcesses.sort((a, b) => processOrderIndex(a.name) - processOrderIndex(b.name) || processIds.indexOf(a.id) - processIds.indexOf(b.id));
-      const createdAt = new Date().toISOString();
-      const routes = selectedProcesses.map((process, index) => ({
-        id: id("r"), workOrderId: workOrder.id, processId: process.id, processName: normalizeProcessName(process.name),
-        assignedRole: getProcessRole(process.name), sequence: index + 1, assignedTo: "", qrToken: qrToken("rt"), status: "待开始",
-        planQty: Number(workOrder.planQty || order.quantity), completedQty: 0, goodQty: 0, badQty: 0, reworkQty: 0,
-      }));
-      db.routes.push(...routes);
-      workOrder.creationStatus = "confirmed";
-      workOrder.confirmedAt = createdAt;
-      workOrder.confirmedBy = user.id;
-      syncWorkOrder(db, workOrder.id);
-      appendAudit(db, user, "platform-order-confirm", "order", order.id, { workOrderId: workOrder.id, processNames: routes.map((route) => route.processName) });
-      await writeDb(db);
-      return send(res, 200, { ok: true, order, workOrder, routes });
+      const result = await serializePlatformOrder(async () => {
+        const currentDb = await readDb();
+        const order = currentDb.orders.find((item) => item.id === body.orderId);
+        const workOrder = currentDb.workOrders.find((item) => item.orderId === order?.id);
+        if (!order || !workOrder || normalizedOrderSource(order).orderOrigin !== "platform") return { status: 404, data: { error: "平台订单不存在" } };
+        if (workOrder.creationStatus !== "pending") return { status: 409, data: { error: "平台订单已正式创建" } };
+        const selectedProcesses = processIds.map((processId) => currentDb.processes.find((process) => process.id === processId));
+        if (selectedProcesses.some((process) => !process || process.active === false)) return { status: 400, data: { error: "所选工序不存在或已停用" } };
+        if (!selectedProcesses.some((process) => process.name !== "质检")) return { status: 400, data: { error: "质检前至少选择一道生产工序" } };
+        const has = (key) => Object.prototype.hasOwnProperty.call(body, key);
+        const productName = has("productName") ? String(body.productName || "").trim() : order.productName;
+        const quantity = has("quantity") ? Number(body.quantity) : Number(order.quantity);
+        const dueDate = has("dueDate") ? normalizeDate(body.dueDate) : order.dueDate;
+        const priority = has("priority") ? String(body.priority || "").trim() : order.priority;
+        if (!productName || !Number.isInteger(quantity) || quantity < 1 || !dueDate || !["普通", "急单"].includes(priority)) {
+          return { status: 400, data: { error: "订单资料不完整或格式不正确" } };
+        }
+        Object.assign(order, {
+          productName,
+          quantity,
+          dueDate,
+          priority,
+          note: has("note") ? String(body.note || "").trim() : order.note,
+          region: has("region") ? String(body.region || "").trim() : order.region,
+          deliveryAddress: has("deliveryAddress") ? String(body.deliveryAddress || "").trim() : order.deliveryAddress,
+        });
+        workOrder.productName = productName;
+        workOrder.planQty = quantity;
+        selectedProcesses.sort((a, b) => processOrderIndex(a.name) - processOrderIndex(b.name) || processIds.indexOf(a.id) - processIds.indexOf(b.id));
+        const createdAt = new Date().toISOString();
+        const routes = selectedProcesses.map((process, index) => ({
+          id: id("r"), workOrderId: workOrder.id, processId: process.id, processName: normalizeProcessName(process.name),
+          assignedRole: getProcessRole(process.name), sequence: index + 1, assignedTo: "", qrToken: qrToken("rt"), status: "待开始",
+          planQty: Number(workOrder.planQty || order.quantity), completedQty: 0, goodQty: 0, badQty: 0, reworkQty: 0,
+        }));
+        currentDb.routes.push(...routes);
+        workOrder.creationStatus = "confirmed";
+        workOrder.confirmedAt = createdAt;
+        workOrder.confirmedBy = user.id;
+        syncWorkOrder(currentDb, workOrder.id);
+        appendAudit(currentDb, user, "platform-order-confirm", "order", order.id, { workOrderId: workOrder.id, processNames: routes.map((route) => route.processName) });
+        await writeDb(currentDb);
+        return { status: 200, data: { ok: true, order, workOrder, routes } };
+      });
+      return send(res, result.status, result.data);
     }
 
     if (req.method === "POST" && url.pathname === "/api/orders/fulfillment") {
