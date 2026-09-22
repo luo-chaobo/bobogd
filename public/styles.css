@@ -1518,7 +1518,7 @@ textarea:focus {
   display: grid;
   min-height: 100vh;
   min-height: 100dvh;
-  place-items: center start;
+  place-items: center;
   padding: clamp(24px, 6vw, 96px);
   background:
     linear-gradient(90deg, rgba(7, 19, 29, .88) 0%, rgba(7, 19, 29, .66) 42%, rgba(7, 19, 29, .16) 78%),
@@ -1532,9 +1532,9 @@ textarea:focus {
   border: 1px solid rgba(255, 255, 255, .7);
   border-top: 5px solid #f36b2d;
   border-radius: 18px;
-  background: rgba(255, 255, 255, .92);
-  box-shadow: 0 30px 80px rgba(3, 12, 19, .32);
-  backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, .78);
+  box-shadow: 0 30px 80px rgba(3, 12, 19, .26);
+  backdrop-filter: blur(22px) saturate(135%);
   text-align: center;
 }
 .admin-login-logo { display: block; width: 96px; height: 96px; margin: 0 auto 18px; object-fit: contain; filter: drop-shadow(0 8px 12px rgba(14, 26, 36, .16)); }

@@ -15,3 +15,12 @@ test("renders the centered branded login over the approved factory background", 
   assert.match(styles, /@media \(max-width:\s*700px\)/);
   assert.ok(fs.statSync(image).size > 100_000);
 });
+
+test("centers the login card and keeps its frosted surface translucent", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "..", "public", "styles.css"), "utf8");
+
+  assert.doesNotMatch(styles, /\.admin-page:has\(#admin-auth:not\(\[hidden\]\)\)\s*\{[^}]*place-items:\s*center start;/s);
+  assert.match(styles, /\.admin-page:has\(#admin-auth:not\(\[hidden\]\)\)\s*\{[^}]*place-items:\s*center;/s);
+  assert.match(styles, /#admin-auth\.admin-login\s*\{[^}]*background:\s*rgba\(255,\s*255,\s*255,\s*\.78\);/s);
+  assert.match(styles, /#admin-auth\.admin-login\s*\{[^}]*backdrop-filter:\s*blur\(22px\)\s+saturate\(135%\);/s);
+});
