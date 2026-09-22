@@ -1514,9 +1514,36 @@ textarea:focus {
 .admin-page input,
 .admin-page select,
 .admin-page textarea { font: inherit; }
-.admin-login { width: min(520px, calc(100% - 36px)); margin: 10vh auto; padding: 48px; border-top: 5px solid #f36b2d; background: #fff; box-shadow: 0 22px 60px rgba(14, 26, 36, .12); text-align: center; }
-.admin-login h1 { margin: 8px 0; font-size: 34px; }
-.admin-login p:not(.eyebrow) { margin-bottom: 28px; color: #62707a; }
+.admin-page:has(#admin-auth:not([hidden])) {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center start;
+  padding: clamp(24px, 6vw, 96px);
+  background:
+    linear-gradient(90deg, rgba(7, 19, 29, .88) 0%, rgba(7, 19, 29, .66) 42%, rgba(7, 19, 29, .16) 78%),
+    url("/assets/images/sales-engineer-phone-support.png") center / cover no-repeat;
+}
+.admin-page #admin-auth.admin-login {
+  width: min(520px, 100%);
+  max-width: 520px;
+  margin: 0;
+  padding: clamp(36px, 5vw, 56px);
+  border: 1px solid rgba(255, 255, 255, .7);
+  border-top: 5px solid #f36b2d;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 30px 80px rgba(3, 12, 19, .32);
+  backdrop-filter: blur(16px);
+  text-align: center;
+}
+.admin-login-logo { display: block; width: 96px; height: 96px; margin: 0 auto 18px; object-fit: contain; filter: drop-shadow(0 8px 12px rgba(14, 26, 36, .16)); }
+.admin-login h1 { margin: 10px 0 14px; color: #101820; font-size: clamp(30px, 3vw, 38px); line-height: 1.2; }
+.admin-login p:not(.eyebrow) { max-width: 390px; margin: 0 auto 30px; color: #52616b; line-height: 1.75; }
+.admin-login .eyebrow { color: #b84612; letter-spacing: .18em; }
+.admin-login .button { min-height: 52px; padding: 0 28px; border-radius: 8px; box-shadow: 0 12px 26px rgba(243, 107, 45, .24); transition: background-color .2s ease, box-shadow .2s ease; }
+.admin-login .button:hover { background: #de581c; box-shadow: 0 16px 30px rgba(243, 107, 45, .32); }
+.admin-login .button:focus-visible { outline: 3px solid rgba(243, 107, 45, .35); outline-offset: 4px; }
 .admin-shell { min-height: 100vh; }
 .admin-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; width: 248px; flex-direction: column; padding: 24px 18px; background: #0e1a24; color: #fff; }
 .admin-brand { display: flex; align-items: center; gap: 12px; padding: 2px 8px 28px; color: #fff; }
@@ -1716,7 +1743,22 @@ textarea:focus {
 
 @media (prefers-reduced-motion: reduce) {
   .admin-sidebar,
-  .admin-table tbody tr { transition: none; }
+  .admin-table tbody tr,
+  .admin-login .button { transition: none; }
+}
+
+@media (max-width: 700px) {
+  .admin-page:has(#admin-auth:not([hidden])) {
+    place-items: center;
+    padding: 20px;
+    background:
+      linear-gradient(rgba(7, 19, 29, .56), rgba(7, 19, 29, .7)),
+      url("/assets/images/sales-engineer-phone-support.png") 64% center / cover no-repeat;
+  }
+  .admin-page #admin-auth.admin-login { padding: 34px 24px; border-radius: 14px; }
+  .admin-login-logo { width: 82px; height: 82px; margin-bottom: 14px; }
+  .admin-login h1 { font-size: 28px; }
+  .admin-login .button { width: 100%; }
 }
 
 @media (max-width: 420px) {
