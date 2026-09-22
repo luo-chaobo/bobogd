@@ -63,7 +63,7 @@ test("allows payment confirmation only after a quote is confirmed", () => {
 });
 
 test("publishes only supported customer-visible statuses and blocks unpaid production", () => {
-  assert.deepEqual(PUBLIC_STATUS_DICTIONARY.order, ["paid", "production", "quality", "ready", "completed"]);
+  assert.deepEqual(PUBLIC_STATUS_DICTIONARY.order, ["awaiting_payment", "awaiting_schedule", "paid", "production", "quality", "ready", "shipped", "completed"]);
   assert.equal(canEnterProduction({ paymentStatus: "paid", status: "paid" }), true);
   assert.equal(canEnterProduction({ paymentStatus: "unpaid", status: "paid" }), false);
 });

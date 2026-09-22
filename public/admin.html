@@ -1,3 +1,96 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>客服工作台｜未来机械</title><link rel="icon" href="/assets/brand/wl-favicon-32.png" type="image/png"><meta property="og:image" content="https://wljixie.com/assets/brand/wl-social-card-1200x630.jpg"><link rel="stylesheet" href="/styles.css"></head>
-<body class="admin-page"><header class="site-header"><a class="brand" href="/"><span>WL</span><strong>客服工作台<small>快速接单与订单进度</small></strong></a><label>后台令牌<input id="admin-token" type="password" autocomplete="current-password"></label><button id="load-admin" class="button button-small">进入工作台</button></header><main class="section"><div class="section-heading"><p class="eyebrow">内部后台</p><h1>新需求与履约节点</h1><p>令牌仅保存在当前浏览器会话。生产环境必须使用强令牌并通过HTTPS访问。</p></div><div id="admin-summary" class="promise-bar"><span>待载入</span></div><h2>询价需求</h2><div id="inquiry-list" class="service-grid" aria-live="polite"></div><h2>正式订单</h2><div id="order-list" class="service-grid" aria-live="polite"></div></main><dialog id="workflow-dialog"><form id="workflow-form" method="dialog" class="form-card"><h2 id="workflow-title">处理需求</h2><input name="inquiryId" type="hidden"><label>操作人<input name="operator" required value="客服"></label><label>报价金额<input name="amount" type="number" min="0.01" step="0.01" required></label><label>报价有效期<input name="validUntil" type="date" required></label><button name="action" value="claim" class="button" type="button">认领需求</button><button name="action" value="quote" class="button" type="button">创建并确认报价</button><button name="action" value="pay" class="button" type="button">确认全额到账并建单</button><button class="button button-ghost" type="button" data-close>关闭</button><p id="workflow-result" class="form-result" aria-live="polite"></p></form></dialog><dialog id="event-dialog"><form id="event-form" class="form-card"><h2>更新公开进度</h2><input name="orderId" type="hidden"><label>操作人<input name="operator" required value="客服"></label><label>进度状态<select name="status"><option value="production">生产中</option><option value="quality">质检中</option><option value="ready">待交付</option><option value="completed">已完成</option></select></label><label>客户可见说明<input name="title" required placeholder="如：已进入折弯工序"></label><button class="button" type="submit">发布进度</button><button class="button button-ghost" type="button" data-event-close>关闭</button><p id="event-result" class="form-result" aria-live="polite"></p></form></dialog><script src="/admin.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>运营工作台｜未来机械</title>
+  <link rel="icon" href="/assets/brand/wl-favicon-32.png" type="image/png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="admin-page">
+  <section id="admin-auth" class="admin-login">
+    <img src="/assets/brand/wl-mark-transparent.png" width="72" height="72" alt="WL">
+    <p class="eyebrow">FUTURE MACHINERY OPS</p><h1>未来机械运营工作台</h1>
+    <p>客服工作台升级版：询价、订单、收款与履约集中管理。</p>
+    <a id="wecom-login" class="button" href="/api/admin/auth/wecom/start">企业微信扫码登录</a>
+  </section>
+
+  <div id="admin-workspace" class="admin-shell" hidden>
+    <aside class="admin-sidebar">
+      <a class="admin-brand" href="/"><img src="/assets/brand/wl-mark-transparent.png" width="44" height="44" alt=""><span><b>未来机械</b><small>运营工作台</small></span></a>
+      <nav aria-label="后台主导航">
+        <button class="active" data-view="dashboard"><span>01</span>工作台</button>
+        <button data-view="inquiries"><span>02</span>询价管理</button>
+        <button data-view="orders"><span>03</span>订单管理</button>
+        <button data-view="payments"><span>04</span>收款管理</button>
+        <button data-view="customers"><span>05</span>客户档案</button>
+        <button data-view="todos"><span>06</span>异常待办</button>
+      </nav>
+      <p class="admin-sidebar-note">内部系统 · 操作全程留痕</p>
+    </aside>
+
+    <main class="admin-main">
+      <header class="admin-topbar">
+        <button id="admin-menu" class="admin-menu" aria-label="打开导航">☰</button>
+        <div><p id="admin-kicker">OPERATIONS OVERVIEW</p><h1 id="admin-title">工作台</h1></div>
+        <div class="admin-topbar-actions"><div class="admin-refresh-box"><small id="admin-updated-at">尚未更新</small><button id="admin-refresh" class="button button-small button-ghost" type="button">刷新</button></div><div id="admin-user"><span><strong></strong><small id="admin-role"></small></span><button id="admin-logout" class="button button-small button-ghost">退出</button></div></div>
+      </header>
+      <div id="admin-notice" class="admin-notice" role="status" aria-live="polite"></div>
+
+      <section class="admin-view active" data-panel="dashboard">
+        <div id="dashboard-grid" class="admin-metrics"></div>
+        <div class="admin-panel"><div class="admin-panel-head"><div><p class="eyebrow">ACTION QUEUE</p><h2>优先处理</h2></div><button class="button button-small" data-go="inquiries">进入询价管理</button></div><div id="dashboard-queue" class="admin-queue"></div></div>
+      </section>
+
+      <section class="admin-view" data-panel="inquiries">
+        <div class="admin-toolbar"><form id="inquiry-filter"><input name="search" type="search" placeholder="编号、客户、手机、地区、描述"><select name="view"><option value="active">活动询价</option><option value="ordered">已转订单</option><option value="closed">已关闭</option><option value="all">全部询价</option></select><button class="button button-small">查询</button></form></div>
+        <div class="admin-table-wrap"><table id="inquiry-table" class="admin-table"><thead><tr><th>询价编号 / 提交时间</th><th>客户 / 手机</th><th>地区 / 地址</th><th>需求摘要</th><th>数量 / 交期</th><th>附件</th><th>状态 / 负责人</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+      </section>
+
+      <section class="admin-view" data-panel="orders">
+        <div class="admin-toolbar"><form id="order-filter"><input name="search" type="search" placeholder="订单、询价、姓名、手机、地区"><select name="view"><option value="active">履约中</option><option value="completed">已完成</option><option value="all">全部订单</option></select><input name="from" type="date" aria-label="开始日期"><input name="to" type="date" aria-label="结束日期"><button class="button button-small">查询</button></form></div>
+        <div class="admin-table-wrap"><table id="order-table" class="admin-table"><thead><tr><th>订单 / 来源询价</th><th>客户</th><th>履约状态</th><th>当前工序</th><th>付款状态</th><th>应收 / 已收 / 未收</th><th>波波同步</th><th>建单时间</th><th>操作</th></tr></thead><tbody id="order-list"></tbody></table></div>
+      </section>
+
+      <section class="admin-view" data-panel="payments">
+        <div class="admin-toolbar"><form id="payment-filter"><select name="status"><option value="">全部收款</option><option value="pending">待核验</option><option value="verified">已确认</option><option value="rejected">已驳回</option><option value="voided">已作废</option></select><input name="from" type="date" aria-label="开始日期"><input name="to" type="date" aria-label="结束日期"><button class="button button-small">查询</button></form></div>
+        <div class="admin-table-wrap"><table id="payment-table" class="admin-table"><thead><tr><th>订单号</th><th>到账金额</th><th>付款方 / 方式</th><th>到账时间</th><th>登记人</th><th>状态 / 核验人</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+      </section>
+
+      <section class="admin-view" data-panel="customers"><div class="admin-table-wrap"><table id="customer-table" class="admin-table"><thead><tr><th>客户</th><th>手机号</th><th>询价数</th><th>订单数</th><th>最近往来</th><th>操作</th></tr></thead><tbody></tbody></table></div></section>
+      <section class="admin-view" data-panel="todos"><div class="admin-table-wrap"><table id="todo-table" class="admin-table"><thead><tr><th>类型</th><th>关联对象</th><th>异常说明</th><th>产生时间</th><th>状态</th></tr></thead><tbody></tbody></table></div></section>
+    </main>
+  </div>
+
+  <div id="admin-detail-backdrop" class="admin-drawer-backdrop" hidden></div>
+  <aside id="admin-detail" class="admin-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title" hidden><header><div><p class="eyebrow">DETAIL</p><h2 id="detail-title">详情</h2></div><button id="detail-close" aria-label="关闭详情">×</button></header><div id="detail-body"></div></aside>
+
+  <dialog id="quote-dialog" class="admin-quote-dialog"><form id="quote-form" class="admin-form">
+    <h2>创建报价</h2><input name="inquiryId" type="hidden">
+    <div class="admin-quote-fields">
+      <label>需求内容<textarea name="requirement" maxlength="500" required></textarea></label>
+      <label>材料<input name="material" maxlength="120"></label>
+      <label>厚度<input name="thickness" maxlength="80" placeholder="例如：1.5 mm"></label>
+      <label>尺寸<input name="dimensions" maxlength="200"></label>
+      <label>加工工艺<textarea name="process" maxlength="300" placeholder="例如：激光切割、折弯、焊接、喷塑"></textarea></label>
+      <label>数量<input name="quantity" type="number" min="1" step="1" required></label>
+      <label>期望交期<input name="expectedDate" type="date"></label>
+      <label>技术要求<textarea name="technicalRequirements" maxlength="500"></textarea></label>
+      <label>备注<textarea name="remark" maxlength="500"></textarea></label>
+    </div>
+    <div class="admin-quote-commercial">
+      <label>报价总价<input name="amount" type="number" min="0.01" step="0.01" required></label>
+      <label>报价有效期<input name="validUntil" type="date" required></label>
+      <label>付款条件<select name="paymentMode"><option value="full">全款后开工</option><option value="deposit">定金后开工，发货前付清</option></select></label>
+      <label>约定开工款<input name="startAmount" type="number" min="0.01" step="0.01" required></label>
+    </div>
+    <p id="quote-result" class="form-result" aria-live="polite"></p>
+    <div class="admin-form-actions"><button class="button" type="submit">保存并确认报价</button><button class="button button-ghost" type="button" data-dialog-close>关闭</button></div>
+  </form></dialog>
+  <dialog id="payment-dialog"><form id="payment-form" class="admin-form"><h2>登记收款</h2><input name="orderId" type="hidden"><label>本次到账金额<input name="amount" type="number" min="0.01" step="0.01" required></label><label>付款方式<select name="paymentMethod"><option>银行转账</option><option>微信</option><option>支付宝</option><option>现金</option><option>其他</option></select></label><label>实际到账时间<input name="receivedAt" type="datetime-local"></label><label>付款方<input name="payerName" maxlength="80"></label><label>备注<textarea name="note" maxlength="300"></textarea></label><label>付款凭证（可选）<input name="proof" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp"></label><p id="payment-result" class="form-result" aria-live="polite"></p><div class="admin-form-actions"><button class="button" type="submit">提交待核验</button><button class="button button-ghost" type="button" data-dialog-close>关闭</button></div></form></dialog>
+  <dialog id="action-dialog" class="admin-action-dialog" aria-modal="true" aria-labelledby="action-title" aria-describedby="action-description"><form id="action-form" class="admin-form"><p class="eyebrow">ACTION CONFIRMATION</p><h2 id="action-title">确认操作</h2><p id="action-description" class="admin-action-description"></p><dl id="action-summary" class="admin-action-summary"></dl><div id="action-proof"></div><label id="action-reason-wrap"><span id="action-reason-label">操作原因</span><textarea name="reason" maxlength="300"></textarea></label><p id="action-result" class="form-result" aria-live="polite"></p><div class="admin-form-actions"><button id="action-submit" class="button" type="submit">确认</button><button class="button button-ghost" type="button" data-dialog-close>取消</button></div></form></dialog>
+  <dialog id="preview-dialog" class="admin-preview" aria-labelledby="preview-title"><div class="admin-preview-shell"><header><div><p class="eyebrow">PREVIEW</p><h2 id="preview-title">文件预览</h2></div><button type="button" data-preview-close aria-label="关闭预览">×</button></header><div id="preview-content" class="admin-preview-content"></div><footer><div class="admin-preview-zoom"><button id="preview-zoom-out" class="button button-small button-ghost" type="button" hidden>缩小</button><button id="preview-fit" class="button button-small button-ghost" type="button" hidden>适应窗口</button><button id="preview-zoom-in" class="button button-small button-ghost" type="button" hidden>放大</button></div><div><a id="preview-download" class="button button-small" download>下载</a><button class="button button-small button-ghost" type="button" data-preview-close>关闭</button></div></footer></div></dialog>
+  <script src="/admin-tools.js"></script>
+  <script src="/admin.js"></script>
+</body>
+</html>

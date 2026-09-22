@@ -12,8 +12,26 @@ export interface ApiClientOptions {
   request?: ApiRequest;
 }
 
+export interface OrderQuery {
+  scope: "active" | "history";
+  keyword?: string;
+  startDate?: string;
+  endDate?: string;
+  page?: number;
+  pageSize?: number;
+}
+
 function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/$/, "");
+}
+
+function orderQueryString(input: OrderQuery) {
+  const values: Array<[string, string | number | undefined]> = [
+    ["scope", input.scope], ["keyword", input.keyword], ["startDate", input.startDate],
+    ["endDate", input.endDate], ["page", input.page || 1], ["pageSize", input.pageSize || 20]
+  ];
+  return values.filter(([, value]) => value !== undefined && value !== "")
+    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`).join("&");
 }
 
 function wxRequest(options: ApiRequestOptions): Promise<any> {
@@ -46,8 +64,10 @@ export function createApiClient(options: ApiClientOptions) {
     updateInquiry: (id: number, data: unknown, token: string) => call(`/api/customer/inquiries/${id}`, "POST", data, token),
     supplementInquiry: (id: number, data: unknown, token: string) => call(`/api/customer/inquiries/${id}/supplements`, "POST", data, token),
     getRequirements: (token: string) => call("/api/customer/inquiries", "GET", undefined, token),
-    getOrders: (token: string) => call("/api/customer/orders", "GET", undefined, token),
+    getOrders: (query: OrderQuery, token: string) => call(`/api/customer/orders?${orderQueryString(query)}`, "GET", undefined, token),
     getOrder: (id: number, token: string) => call(`/api/customer/orders/${id}`, "GET", undefined, token),
+    getRepurchaseDraft: (id: number, token: string) => call(`/api/customer/orders/${id}/repurchase-draft`, "GET", undefined, token),
+    repurchaseOrder: (id: number, data: unknown, token: string) => call(`/api/customer/orders/${id}/repurchase`, "POST", data, token),
     saveSubscriptions: (types: string[], token: string) => call("/api/customer/subscriptions", "POST", { types }, token)
   };
 }

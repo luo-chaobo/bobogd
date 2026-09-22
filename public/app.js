@@ -1,6 +1,6 @@
-const MAX_ATTACHMENT_COUNT = 3;
+const MAX_ATTACHMENT_COUNT = 5;
 const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
-const MAX_TOTAL_ATTACHMENT_SIZE = 30 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_SIZE = 40 * 1024 * 1024;
 const SERVICE_UNAVAILABLE_MESSAGE = "服务暂时不可用，请稍后重试或电话联系";
 const NAV_GROUPS = [
   { label: "加工能力", href: "/capabilities.html", items: [
@@ -63,13 +63,13 @@ async function runLockedRequest(form, request) {
 
 function fileSelectionProblem(files) {
   const selected = Array.from(files || []);
-  if (selected.length > MAX_ATTACHMENT_COUNT) return "附件最多3个";
+  if (selected.length > MAX_ATTACHMENT_COUNT) return "附件最多5个";
   let totalSize = 0;
   for (const file of selected) {
     if (file.size > MAX_ATTACHMENT_SIZE) return "单个附件不能超过20MB";
     totalSize += file.size;
   }
-  return totalSize > MAX_TOTAL_ATTACHMENT_SIZE ? "附件总大小不能超过30MB" : null;
+  return totalSize > MAX_TOTAL_ATTACHMENT_SIZE ? "附件总大小不能超过40MB" : null;
 }
 
 function localDate(date = new Date()) {
@@ -113,6 +113,20 @@ function renderOrderResult(container, result) {
     events.append(event);
   }
   card.append(orderNumber, status, events);
+  if (Array.isArray(result.processes) && result.processes.length > 0) {
+    const section = documentRef.createElement("section");
+    const heading = documentRef.createElement("h3");
+    const list = documentRef.createElement("ol");
+    heading.textContent = "公开工序进度";
+    list.className = "order-events";
+    for (const process of result.processes) {
+      const item = documentRef.createElement("li");
+      item.textContent = `${process.name}：${process.status}`;
+      list.append(item);
+    }
+    section.append(heading, list);
+    card.append(section);
+  }
   clearElement(container);
   container.append(card);
 }
@@ -125,8 +139,39 @@ function renderInquirySuccess(container, inquiryNumber) {
   number.textContent = inquiryNumber;
 }
 
+function closeExpandedNavigation(nav, exceptButton = null) {
+  for (const button of nav.querySelectorAll('.nav-trigger[aria-expanded="true"]')) {
+    if (button !== exceptButton) button.setAttribute("aria-expanded", "false");
+  }
+}
+
+function handleNavigationPointerOver(nav, target) {
+  if (!target || typeof target.closest !== "function") return;
+  const item = target.closest(".nav-group, a");
+  if (!item || !nav.contains(item)) return;
+  const hoveredButton = item.querySelector?.(".nav-trigger");
+  closeExpandedNavigation(nav, hoveredButton);
+  const activeElement = nav.ownerDocument?.activeElement;
+  if (activeElement !== hoveredButton && activeElement?.matches?.(".nav-trigger")) activeElement.blur();
+}
+
+function shouldResetInitialScroll(locationRef) {
+  return /\/contact\.html$/.test(locationRef.pathname || "") && !locationRef.hash;
+}
+
+async function copyFactoryAddress(address, status, clipboard) {
+  try {
+    await clipboard.writeText(address);
+    status.textContent = "工厂地址已复制";
+    return true;
+  } catch {
+    status.textContent = `复制失败，请长按地址文字复制：${address}`;
+    return false;
+  }
+}
+
 if (typeof module === "object" && module.exports) {
-  module.exports = { NAV_GROUPS, fileSelectionProblem, fileToAttachment, localDate, parseApiResponse, renderOrderResult, runLockedRequest };
+  module.exports = { NAV_GROUPS, closeExpandedNavigation, copyFactoryAddress, fileSelectionProblem, fileToAttachment, handleNavigationPointerOver, localDate, parseApiResponse, renderOrderResult, runLockedRequest, shouldResetInitialScroll };
 }
 
 function enhanceNavigation(documentRef) {
@@ -158,15 +203,16 @@ function enhanceNavigation(documentRef) {
     }
     button.addEventListener("click", () => {
       const open = button.getAttribute("aria-expanded") === "true";
-      for (const other of nav.querySelectorAll('.nav-trigger[aria-expanded="true"]')) other.setAttribute("aria-expanded", "false");
+      closeExpandedNavigation(nav);
       button.setAttribute("aria-expanded", String(!open));
     });
     wrapper.append(button, menu);
     source.replaceWith(wrapper);
   }
+  nav.addEventListener("pointerover", (event) => handleNavigationPointerOver(nav, event.target));
   documentRef.addEventListener("click", (event) => {
     if (nav.contains(event.target)) return;
-    for (const button of nav.querySelectorAll('.nav-trigger[aria-expanded="true"]')) button.setAttribute("aria-expanded", "false");
+    closeExpandedNavigation(nav);
   });
   documentRef.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -185,6 +231,20 @@ const orderResult = typeof document === "undefined" ? null : document.getElement
 
 if (typeof document !== "undefined" && typeof document.querySelector === "function") enhanceNavigation(document);
 
+if (typeof window !== "undefined" && shouldResetInitialScroll(window.location)) {
+  window.history.scrollRestoration = "manual";
+  window.addEventListener("pageshow", () => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
+  window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
+}
+
+if (typeof document !== "undefined" && typeof document.querySelector === "function") {
+  const copyAddressButton = document.querySelector("[data-copy-address]");
+  const copyAddressStatus = document.getElementById("copy-address-status");
+  if (copyAddressButton && copyAddressStatus) copyAddressButton.addEventListener("click", () => {
+    copyFactoryAddress(copyAddressButton.dataset.copyAddress, copyAddressStatus, navigator.clipboard);
+  });
+}
+
 if (inquiryForm && inquiryResult) {
   inquiryForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -199,7 +259,7 @@ if (inquiryForm && inquiryResult) {
         const attachments = await Promise.all(files.map(fileToAttachment));
         const data = new FormData(inquiryForm);
         const payload = {
-          drawingMode: data.get("drawingMode"), contactName: data.get("contactName"), phone: data.get("phone"), region: data.get("region"),
+          drawingMode: data.get("drawingMode"), contactName: data.get("contactName"), phone: data.get("phone"), region: data.get("region"), address: data.get("address"),
           quantity: Number(data.get("quantity")), expectedDate: data.get("expectedDate"), material: data.get("material"), dimensions: data.get("dimensions"),
           description: data.get("description"), attachments
         };

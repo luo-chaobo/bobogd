@@ -19,7 +19,9 @@
     "minifyWXML": true,
     "localPlugins": false,
     "disableUseStrict": false,
-    "useCompilerPlugins": ["typescript"],
+    "useCompilerPlugins": [
+      "typescript"
+    ],
     "condition": false,
     "swc": false,
     "disableSWC": true,
@@ -31,7 +33,7 @@
   },
   "compileType": "miniprogram",
   "libVersion": "3.7.10",
-  "appid": "wx7e37e22cdf4b93da",
+  "appid": "wx42cb94dcdcca5990",
   "projectname": "future-machinery-client",
   "miniprogramRoot": "./",
   "simulatorPluginLibVersion": {},

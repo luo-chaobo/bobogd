@@ -1,10 +1,12 @@
-export const DEVELOPMENT_API_BASE_URL = "http://127.0.0.1:8089";
-export const TRIAL_API_BASE_URL = "https://__REPLACE_WITH_TRIAL_API_HOST__";
-export const PRODUCTION_API_BASE_URL = "";
-export const SUBSCRIPTION_TEMPLATE_IDS: string[] = [];
-export const WECHAT_WORK_KF_URL = "";
-export const WECHAT_WORK_QR_IMAGE = "";
+export const DEVELOPMENT_API_BASE_URL = "https://test.wljixie.com";;
+export const TRIAL_API_BASE_URL = "https://test.wljixie.com";
+export const PRODUCTION_API_BASE_URL = "https://test.wljixie.com";
+export const SUBSCRIPTION_TEMPLATE_IDS: string[] = ["tppDS_ZBA9nKXerDEzEVdd7dRHRH85W7QX4eL_U3zTA"];
+export const WECHAT_WORK_CORP_ID = "wwcf524bec522394af";
+export const WECHAT_WORK_KF_URL = "https://work.weixin.qq.com/kfid/kfc91b64c9e96963032";
+export const WECHAT_WORK_QR_IMAGE = "/assets/images/wecom-customer-service-qr.png";
 export const SERVICE_PHONE = "";
+export const WEBSITE_URL = "https://test.wljixie.com";
 
 export function getApiBaseUrl() {
   const environment = wx.getAccountInfoSync().miniProgram.envVersion;

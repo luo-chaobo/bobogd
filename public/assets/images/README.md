@@ -27,7 +27,12 @@
 | `bending-equipment.jpg` | `cnc-bending-metal-fabrication-factory.jpg` | 折弯设备实拍 |
 | `welding-process.jpg` | `焊工.jpg` | 焊接作业实拍 |
 | `finishing-line.jpg` | `表面处理.jpg` | 表面处理现场实拍 |
+| `process-design.jpg` | `设计师.jpg` | 快速接单平台图纸设计工序 |
+| `process-laser-cutting.jpg` | `激光机3.jpg` | 快速接单平台激光切割工序 |
+| `process-bending.jpg` | `设备1.jpg` | 快速接单平台数控折弯工序 |
+| `process-welding.jpg` | `焊工2.jpg` | 快速接单平台焊接修整工序 |
 | `case-control-cabinet.jpg` | `custom-sheet -metal-Electric control box.jpg` | 控制柜产品实拍 |
+| `case-electrical-control-cabinet.jpg` | `batch-1.jpg` | 首页精选案例电控柜产品图 |
 | `case-machine-cover.jpg` | `industrial-cnc-machine-cover-fabrication.jpg` | 设备罩壳产品图 |
 | `case-sheet-metal-base.jpg` | `non-standard-sheet-metal-base.jpg` | 非标底座产品图 |
 | `case-turnover-bin.jpg` | `非标周转箱钣金C.jpg` | 周转箱产品图 |
@@ -42,3 +47,7 @@
 ## 宣传片衍生说明
 
 `public/assets/video/factory-service.mp4` 由本表中的自有照片通过 `media/promo` Remotion 工程制作，未加入第三方图片、音乐或旁白。成片只用于展示现有工厂现场、加工环节和已确认的服务流程；更换真实视频素材时应继续保留来源与授权记录。
+
+## 企业微信客服二维码
+
+`wecom-customer-service-qr.png` 由用户于2026年9月12日从企业微信“客户联系—联系我”下载，类型为多人客服二维码。官网首页与快速接单页共用该文件；在企业微信后台编辑同一联系方式的接待成员时通常无需替换图片，删除并重新创建联系方式后必须用新二维码覆盖该文件并重新验收扫码结果。

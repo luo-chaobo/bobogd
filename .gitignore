@@ -18,6 +18,8 @@ node_modules/
 .remotion/
 coverage/
 dist/
+release/
+miniprogram/.workbuddy/
 
 # Logs and temporary files
 *.log

@@ -34,7 +34,7 @@ async function withApp(run) {
   await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${app.server.address().port}`;
   try {
-    await run(baseUrl);
+    await run(baseUrl, app);
   } finally {
     await new Promise((resolve) => app.server.close(resolve));
     app.close();
@@ -158,6 +158,53 @@ test("completes claim quote payment order and public status workflow", async () 
     assert.equal(status.body.totalAmount, undefined);
     assert.equal(status.body.internalNote, undefined);
     assert.equal(status.body.events.at(-1).title, "已进入生产");
+  });
+});
+
+test("creates one immutable receipt snapshot for a confirmed payment", async () => {
+  await withApp(async (baseUrl) => {
+    const created = await jsonRequest(`${baseUrl}/api/inquiries`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(inquiryPayload())
+    });
+    const adminHeaders = { authorization: "Bearer test-token", "content-type": "application/json" };
+    await jsonRequest(`${baseUrl}/api/admin/inquiries/${created.body.id}/quotes`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ amount: 2800, validUntil: "2026-09-05", confirmed: true })
+    });
+    const order = await jsonRequest(`${baseUrl}/api/admin/inquiries/${created.body.id}/payment-confirmation`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ paymentMethod: "银行转账", payerName: "王先生", receivedAt: "2026-08-29T01:30:00.000Z" })
+    });
+    const orders = await jsonRequest(`${baseUrl}/api/admin/orders`, { headers: adminHeaders });
+    assert.equal(typeof orders.body[0].paymentId, "number");
+
+    const first = await jsonRequest(`${baseUrl}/api/admin/payments/${orders.body[0].paymentId}/receipt`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: "{}"
+    });
+    assert.equal(first.response.status, 201);
+    assert.match(first.body.receiptNumber, /^SJ-20260829-\d{4}$/);
+    assert.equal(first.body.companyName, "宁波未来机械制造有限公司");
+    assert.equal(first.body.orderNumber, order.body.orderNumber);
+    assert.equal(first.body.payerName, "王先生");
+    assert.equal(first.body.amount, 2800);
+    assert.equal(first.body.paymentMethod, "银行转账");
+    assert.equal(first.body.receivedAt, "2026-08-29T01:30:00.000Z");
+    assert.equal(first.body.purpose, "非标钣金加工款");
+    assert.equal(first.body.status, "active");
+
+    const repeated = await jsonRequest(`${baseUrl}/api/admin/payments/${orders.body[0].paymentId}/receipt`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: "{}"
+    });
+    assert.equal(repeated.response.status, 200);
+    assert.deepEqual(repeated.body, first.body);
   });
 });
 
@@ -328,11 +375,123 @@ test("links a same-phone customer in admin and exposes their order list and deta
     await jsonRequest(`${baseUrl}/api/admin/inquiries/${created.body.id}/payment-confirmation`, { method: "POST", headers: adminHeaders, body: "{}" });
     const orders = await jsonRequest(`${baseUrl}/api/customer/orders`, { headers: customerHeadersValue });
     assert.equal(orders.response.status, 200);
-    assert.equal(orders.body.length, 1);
-    assert.equal(typeof orders.body[0].id, "number");
-    const detail = await jsonRequest(`${baseUrl}/api/customer/orders/${orders.body[0].id}`, { headers: customerHeadersValue });
+    assert.equal(orders.body.total, 1);
+    assert.equal(typeof orders.body.items[0].id, "number");
+    const detail = await jsonRequest(`${baseUrl}/api/customer/orders/${orders.body.items[0].id}`, { headers: customerHeadersValue });
     assert.equal(detail.response.status, 200);
     assert.equal(detail.body.orderNumber.startsWith("WL-"), true);
+  });
+});
+
+test("archives converted requirements and supports completed-order repurchase", async () => {
+  await withApp(async (baseUrl, app) => {
+    const login = await jsonRequest(`${baseUrl}/api/auth/wechat/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "mock:repurchase-owner", contactName: "王先生" })
+    });
+    const headers = customerHeaders(login.body.sessionToken);
+    await jsonRequest(`${baseUrl}/api/customer/phone-binding`, {
+      method: "POST", headers, body: JSON.stringify({ phone: "13812345678", verificationProof: "mock:13812345678" })
+    });
+    const inquiry = await jsonRequest(`${baseUrl}/api/customer/inquiries`, {
+      method: "POST", headers, body: JSON.stringify({ ...inquiryPayload(), state: "submitted" })
+    });
+    const adminHeaders = { authorization: "Bearer test-token", "content-type": "application/json" };
+    await jsonRequest(`${baseUrl}/api/admin/inquiries/${inquiry.body.id}/quotes`, {
+      method: "POST", headers: adminHeaders, body: JSON.stringify({
+        amount: 2800,
+        validUntil: "2026-09-05",
+        confirmed: true,
+        specification: { process: "激光切割+折弯", technicalRequirements: "去毛刺" }
+      })
+    });
+    const order = await jsonRequest(`${baseUrl}/api/admin/inquiries/${inquiry.body.id}/payment-confirmation`, {
+      method: "POST", headers: adminHeaders, body: "{}"
+    });
+
+    const requirementsAfterConversion = await jsonRequest(`${baseUrl}/api/customer/inquiries`, { headers });
+    assert.deepEqual(requirementsAfterConversion.body, []);
+    const active = await jsonRequest(`${baseUrl}/api/customer/orders?scope=active&page=1&pageSize=20`, { headers });
+    assert.equal(active.body.total, 1);
+    assert.equal(active.body.items[0].summary, inquiryPayload().description);
+    const premature = await jsonRequest(`${baseUrl}/api/customer/orders/${order.body.id}/repurchase-draft`, { headers });
+    assert.equal(premature.response.status, 409);
+
+    await jsonRequest(`${baseUrl}/api/admin/orders/${order.body.id}/events`, {
+      method: "POST", headers: adminHeaders, body: JSON.stringify({ status: "completed", title: "已送货完成" })
+    });
+    app.database.prepare("UPDATE orders SET completed_at = '', created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(order.body.id);
+    app.database.prepare("INSERT INTO attachments (inquiry_id, original_name, stored_name, size, created_at) VALUES (?, 'late.pdf', 'late.pdf', 8, ?)")
+      .run(inquiry.body.id, "2026-08-29T02:00:00.000Z");
+    const history = await jsonRequest(`${baseUrl}/api/customer/orders?scope=history&keyword=${encodeURIComponent(order.body.orderNumber)}&startDate=2026-08-29&endDate=2026-08-29&page=1&pageSize=20`, { headers });
+    assert.equal(history.body.total, 1);
+    assert.equal(history.body.items[0].completedAt, "2026-08-29T02:00:00.000Z");
+
+    const draft = await jsonRequest(`${baseUrl}/api/customer/orders/${order.body.id}/repurchase-draft`, { headers });
+    assert.equal(draft.response.status, 200);
+    assert.equal(draft.body.form.material, "304不锈钢");
+    assert.equal(draft.body.form.process, "激光切割+折弯");
+    assert.equal(draft.body.form.technicalRequirements, "去毛刺");
+    assert.equal(draft.body.form.expectedDate, "");
+    assert.equal(draft.body.originalAttachments[0].name, "现场.jpg");
+    assert.equal(draft.body.originalAttachments.length, 1);
+
+    const repurchase = await jsonRequest(`${baseUrl}/api/customer/orders/${order.body.id}/repurchase`, {
+      method: "POST", headers, body: JSON.stringify({
+        ...draft.body.form,
+        material: "5052铝板",
+        quantity: 5,
+        expectedDate: "2026-09-30",
+        reuseOriginalAttachments: true,
+        attachments: []
+      })
+    });
+    assert.equal(repurchase.response.status, 201);
+    const requirements = await jsonRequest(`${baseUrl}/api/customer/inquiries`, { headers });
+    assert.equal(requirements.body.length, 1);
+    assert.equal(requirements.body[0].material, "5052铝板");
+    assert.equal(requirements.body[0].quantity, 5);
+    assert.equal(requirements.body[0].process, "激光切割+折弯");
+    assert.equal(app.database.prepare("SELECT COUNT(*) AS count FROM attachments WHERE inquiry_id = ?").get(repurchase.body.id).count, 1);
+
+    const withoutOriginals = await jsonRequest(`${baseUrl}/api/customer/orders/${order.body.id}/repurchase`, {
+      method: "POST", headers, body: JSON.stringify({
+        ...draft.body.form,
+        expectedDate: "2026-10-01",
+        reuseOriginalAttachments: false,
+        attachments: []
+      })
+    });
+    assert.equal(withoutOriginals.response.status, 201);
+    assert.equal(app.database.prepare("SELECT COUNT(*) AS count FROM attachments WHERE inquiry_id = ?").get(withoutOriginals.body.id).count, 0);
+
+    const boundary = "repurchase-upload-boundary";
+    const upload = await jsonRequest(`${baseUrl}/api/wechat/uploads`, {
+      method: "POST",
+      headers: { authorization: headers.authorization, "content-type": `multipart/form-data; boundary=${boundary}` },
+      body: Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="change.pdf"\r\nContent-Type: application/pdf\r\n\r\nPDF DATA\r\n--${boundary}--\r\n`)
+    });
+    const withAdditional = await jsonRequest(`${baseUrl}/api/customer/orders/${order.body.id}/repurchase`, {
+      method: "POST", headers, body: JSON.stringify({
+        ...draft.body.form,
+        expectedDate: "2026-10-02",
+        reuseOriginalAttachments: true,
+        attachments: [{ id: upload.body.id, name: upload.body.name, size: upload.body.size }]
+      })
+    });
+    assert.equal(withAdditional.response.status, 201);
+    assert.equal(app.database.prepare("SELECT COUNT(*) AS count FROM attachments WHERE inquiry_id = ?").get(withAdditional.body.id).count, 2);
+
+    const otherLogin = await jsonRequest(`${baseUrl}/api/auth/wechat/login`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: "mock:repurchase-other" })
+    });
+    const otherHeaders = customerHeaders(otherLogin.body.sessionToken);
+    await jsonRequest(`${baseUrl}/api/customer/phone-binding`, {
+      method: "POST", headers: otherHeaders, body: JSON.stringify({ phone: "13912345678", verificationProof: "mock:13912345678" })
+    });
+    const denied = await jsonRequest(`${baseUrl}/api/customer/orders/${order.body.id}/repurchase-draft`, { headers: otherHeaders });
+    assert.equal(denied.response.status, 404);
   });
 });
 
@@ -406,9 +565,9 @@ function encodedAttachment(name, bytes, declaredSize = bytes.length) {
   return { name, size: declaredSize, content: bytes.toString("base64") };
 }
 
-test("accepts two 12MiB public attachments within the decoded 30MiB total limit", async () => {
+test("accepts two 20MiB public attachments at the decoded 40MiB total limit", async () => {
   await withApp(async (baseUrl) => {
-    const bytes = Buffer.alloc(12 * 1024 * 1024, 7);
+    const bytes = Buffer.alloc(20 * 1024 * 1024, 7);
     const payload = inquiryPayload();
     payload.attachments = [encodedAttachment("one.pdf", bytes), encodedAttachment("two.pdf", bytes)];
     const result = await jsonRequest(`${baseUrl}/api/inquiries`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
@@ -426,27 +585,27 @@ test("rejects a public attachment whose decoded bytes exceed 20MiB despite a for
   });
 });
 
-test("rejects more than three public attachments", async () => {
+test("rejects more than five public attachments", async () => {
   await withApp(async (baseUrl) => {
     const payload = inquiryPayload();
-    payload.attachments = ["one.pdf", "two.pdf", "three.pdf", "four.pdf"].map((name) => encodedAttachment(name, Buffer.from("test")));
+    payload.attachments = ["one.pdf", "two.pdf", "three.pdf", "four.pdf", "five.pdf", "six.pdf"].map((name) => encodedAttachment(name, Buffer.from("test")));
     const result = await jsonRequest(`${baseUrl}/api/inquiries`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
     assert.equal(result.response.status, 422);
-    assert.equal(result.body.message, "附件最多3个");
+    assert.equal(result.body.message, "附件最多5个");
   });
 });
 
-test("rejects public attachments whose decoded total exceeds 30MiB", async () => {
+test("rejects public attachments whose decoded total exceeds 40MiB", async () => {
   await withApp(async (baseUrl) => {
     const payload = inquiryPayload();
     payload.attachments = [
-      encodedAttachment("one.pdf", Buffer.alloc(12 * 1024 * 1024, 1)),
-      encodedAttachment("two.pdf", Buffer.alloc(12 * 1024 * 1024, 2)),
-      encodedAttachment("three.pdf", Buffer.alloc(7 * 1024 * 1024, 3))
+      encodedAttachment("one.pdf", Buffer.alloc(20 * 1024 * 1024, 1)),
+      encodedAttachment("two.pdf", Buffer.alloc(20 * 1024 * 1024, 2)),
+      encodedAttachment("three.pdf", Buffer.alloc(1, 3))
     ];
     const result = await jsonRequest(`${baseUrl}/api/inquiries`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
     assert.equal(result.response.status, 422);
-    assert.equal(result.body.message, "附件总大小不能超过30MB");
+    assert.equal(result.body.message, "附件总大小不能超过40MB");
   });
 });
 
@@ -504,6 +663,57 @@ test("sends each order status notification once", async () => {
       await jsonRequest(`${baseUrl}/api/admin/orders/${order.body.id}/events`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ status, title: status }) });
     }
     assert.deepEqual(delivered.filter((job) => job.eventType === "order_status_changed").map((job) => job.payload.status), ["production", "quality", "ready", "completed"]);
+  } finally {
+    await new Promise((resolve) => app.server.close(resolve));
+    app.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("uses one subscription credit to send one WeChat order status message", async () => {
+  const templateId = "tppDS_ZBA9nKXerDEzEVdd7dRHRH85W7QX4eL_U3zTA";
+  const providerCalls = [];
+  const fetchImpl = async (url, options = {}) => {
+    providerCalls.push({ url: String(url), body: options.body ? JSON.parse(options.body) : null });
+    if (String(url).includes("/cgi-bin/token")) return { ok: true, json: async () => ({ access_token: "token", expires_in: 7200 }) };
+    if (String(url).includes("/wxaapi/newtmpl/gettemplate")) return { ok: true, json: async () => ({ data: [{ priTmplId: templateId, content: "订单号{{character_string1.DATA}}\n订单状态{{phrase2.DATA}}\n更新时间{{time3.DATA}}\n备注{{thing4.DATA}}" }] }) };
+    if (String(url).includes("/cgi-bin/message/subscribe/send")) return { ok: true, json: async () => ({ errcode: 0, errmsg: "ok" }) };
+    throw new Error(`unexpected provider URL: ${url}`);
+  };
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "future-wechat-subscription-"));
+  const app = createApplication({
+    dbPath: path.join(directory, "test.sqlite"), uploadDir: path.join(directory, "uploads"),
+    adminToken: "test-token", enableWechatMock: true, enablePhoneMock: true,
+    wechatAppId: "wx-test", wechatAppSecret: "secret", wechatSubscriptionTemplateId: templateId,
+    wechatMiniprogramState: "trial", fetch: fetchImpl,
+    now: () => new Date("2026-08-29T02:00:00.000Z")
+  });
+  await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${app.server.address().port}`;
+  try {
+    const login = await jsonRequest(`${baseUrl}/api/auth/wechat/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: "mock:order-subscriber" }) });
+    const headers = customerHeaders(login.body.sessionToken);
+    await jsonRequest(`${baseUrl}/api/customer/phone-binding`, { method: "POST", headers, body: JSON.stringify({ phone: "13812345678", verificationProof: "mock:13812345678" }) });
+    const inquiry = await jsonRequest(`${baseUrl}/api/customer/inquiries`, { method: "POST", headers, body: JSON.stringify({ ...inquiryPayload(), state: "submitted" }) });
+    const adminHeaders = { authorization: "Bearer test-token", "content-type": "application/json" };
+    await jsonRequest(`${baseUrl}/api/admin/inquiries/${inquiry.body.id}/quotes`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ amount: 2800, validUntil: "2026-09-05", confirmed: true }) });
+    const order = await jsonRequest(`${baseUrl}/api/admin/inquiries/${inquiry.body.id}/payment-confirmation`, { method: "POST", headers: adminHeaders, body: "{}" });
+    const subscription = await jsonRequest(`${baseUrl}/api/customer/subscriptions`, { method: "POST", headers, body: JSON.stringify({ types: [templateId] }) });
+    assert.deepEqual(subscription.body, { enabled: true, availableCount: 1 });
+
+    await jsonRequest(`${baseUrl}/api/admin/orders/${order.body.id}/events`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ status: "production", title: "开始生产" }) });
+    await jsonRequest(`${baseUrl}/api/admin/orders/${order.body.id}/events`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ status: "quality", title: "进入质检" }) });
+
+    const sendCalls = providerCalls.filter((item) => item.url.includes("/cgi-bin/message/subscribe/send"));
+    assert.equal(sendCalls.length, 1);
+    assert.deepEqual(sendCalls[0].body, {
+      touser: "order-subscriber", template_id: templateId,
+      page: `/pages/order-detail/index?id=${order.body.id}`, miniprogram_state: "trial", lang: "zh_CN",
+      data: {
+        character_string1: { value: order.body.orderNumber }, phrase2: { value: "生产中" },
+        time3: { value: "2026-08-29 10:00" }, thing4: { value: "开始生产" }
+      }
+    });
   } finally {
     await new Promise((resolve) => app.server.close(resolve));
     app.close();

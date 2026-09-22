@@ -1,10 +1,10 @@
 const ALLOWED_EXTENSIONS = new Set(["pdf", "jpg", "jpeg", "png", "webp", "dxf", "dwg", "step", "stp", "zip"]);
 const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
-const MAX_ATTACHMENT_COUNT = 3;
-const MAX_TOTAL_ATTACHMENT_SIZE = 30 * 1024 * 1024;
+const MAX_ATTACHMENT_COUNT = 5;
+const MAX_TOTAL_ATTACHMENT_SIZE = 40 * 1024 * 1024;
 const PUBLIC_STATUS_DICTIONARY = Object.freeze({
   inquiry: ["draft", "submitted", "claimed", "ordered"],
-  order: ["paid", "production", "quality", "ready", "completed"],
+  order: ["awaiting_payment", "awaiting_schedule", "paid", "production", "quality", "ready", "shipped", "completed"],
   paymentRule: { productionRequiresConfirmedPayment: true }
 });
 
@@ -35,7 +35,7 @@ function validateInquiry(input) {
     return { field: "quantity", message: "数量必须为正整数" };
   }
   const attachments = input.attachments || [];
-  if (attachments.length > MAX_ATTACHMENT_COUNT) return { field: "attachments", message: "附件最多3个" };
+  if (attachments.length > MAX_ATTACHMENT_COUNT) return { field: "attachments", message: "附件最多5个" };
   let totalSize = 0;
   for (const attachment of attachments) {
     const extension = String(attachment.name || "").split(".").pop().toLowerCase();
@@ -48,7 +48,7 @@ function validateInquiry(input) {
     }
     totalSize += size;
   }
-  if (totalSize > MAX_TOTAL_ATTACHMENT_SIZE) return { field: "attachments", message: "附件总大小不能超过30MB" };
+  if (totalSize > MAX_TOTAL_ATTACHMENT_SIZE) return { field: "attachments", message: "附件总大小不能超过40MB" };
   return null;
 }
 
@@ -61,7 +61,14 @@ function canConfirmPayment(order) {
 }
 
 function canEnterProduction(order) {
-  return order.paymentStatus === "paid" && ["paid", "production", "quality", "ready", "completed"].includes(order.status);
+  if (Number.isFinite(Number(order.verifiedAmount)) && Number.isFinite(Number(order.startAmount))) {
+    return Number(order.verifiedAmount) >= Number(order.startAmount);
+  }
+  return order.paymentStatus === "paid" && ["paid", "awaiting_schedule", "production", "quality", "ready", "shipped", "completed"].includes(order.status);
+}
+
+function canShip(order) {
+  return Number(order.verifiedAmount) >= Number(order.totalAmount);
 }
 
 function validatePublicEventTitle(value) {
@@ -89,6 +96,7 @@ module.exports = {
   PUBLIC_STATUS_DICTIONARY,
   canConfirmPayment,
   canEnterProduction,
+  canShip,
   normalizePhone,
   publicOrder,
   validatePublicEventTitle,

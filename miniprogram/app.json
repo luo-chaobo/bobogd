@@ -1,12 +1,13 @@
 {
   "pages": [
-    "pages/login/index",
     "pages/home/index",
+    "pages/login/index",
     "pages/order-form/index",
     "pages/requirements/index",
     "pages/orders/index",
     "pages/order-detail/index",
     "pages/profile/index",
+    "pages/website/index",
     "pages/legal/index"
   ],
   "window": {

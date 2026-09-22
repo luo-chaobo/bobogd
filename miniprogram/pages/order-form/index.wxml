@@ -1,1 +1,30 @@
-<view class="page"><view class="hero"><text class="eyebrow">FAST REQUEST</text><text class="title">快速提交加工需求</text><text class="subtitle">有图纸、现场照片或只有尺寸描述都可以。</text></view><view class="card"><view class="field"><text class="label">资料情况</text><picker range="{{drawingModes}}" bindchange="drawingMode"><view>{{form.drawingMode}}</view></picker></view><view class="field"><text class="label">联系人</text><input data-field="contactName" value="{{form.contactName}}" bindinput="input" placeholder="姓名或称呼"/></view><view class="field"><text class="label">手机号</text><input data-field="phone" value="{{form.phone}}" bindinput="input" type="number" placeholder="用于联系和订单查询"/></view><view class="field"><text class="label">所在区域</text><input data-field="region" value="{{form.region}}" bindinput="input" placeholder="城市/区县"/></view><view class="field"><text class="label">数量</text><input data-field="quantity" value="{{form.quantity}}" bindinput="input" type="number"/></view><view class="field"><text class="label">期望交期</text><picker mode="date" bindchange="expectedDate"><view>{{form.expectedDate || '请选择日期'}}</view></picker></view><view class="field"><text class="label">加工需求</text><textarea data-field="description" value="{{form.description}}" bindinput="input" placeholder="材料、尺寸、用途、表面要求等"/></view><view class="field"><text class="label">材料（选填）</text><input data-field="material" value="{{form.material}}" bindinput="input"/></view><view class="field"><text class="label">尺寸（选填）</text><input data-field="dimensions" value="{{form.dimensions}}" bindinput="input"/></view><button class="outline" bindtap="chooseImages">选择现场照片</button><button class="outline" bindtap="chooseFiles">选择图纸/多个附件</button><view wx:for="{{attachments}}" wx:key="path" class="list-item row"><text>{{item.name}}</text><text class="muted">{{item.size}} B</text></view><text class="danger" wx:if="{{error}}">{{error}}</text><button class="outline" bindtap="saveDraft">保存草稿</button><button class="primary" loading="{{submitting}}" bindtap="submit">提交需求</button></view></view>
+<view class="page">
+  <view class="hero"><text class="eyebrow">{{sourceOrderId ? 'REORDER REQUEST' : 'FAST REQUEST'}}</text><text class="title">{{sourceOrderId ? '再次购买' : '快速提交加工需求'}}</text><text class="subtitle">{{sourceOrderId ? '源订单：' + sourceOrderNumber + '，修改后将重新报价。' : '有图纸、现场照片或只有尺寸描述都可以。'}}</text></view>
+  <view class="card">
+    <view class="field"><text class="label">资料情况</text><picker range="{{drawingModes}}" bindchange="drawingMode"><view>{{form.drawingMode}}</view></picker></view>
+    <view class="field"><text class="label">联系人</text><input data-field="contactName" value="{{form.contactName}}" bindinput="input" placeholder="姓名或称呼"/></view>
+    <view class="field"><text class="label">手机号{{isBound ? '（已授权）' : ''}}</text><input wx:if="{{isBound}}" value="{{form.phone}}" disabled="true"/><text wx:else class="muted">提交时由您主动授权，仅用于联系报价和查询本人订单。</text></view>
+    <view class="field"><text class="label">所在区域</text><input data-field="region" value="{{form.region}}" bindinput="input" placeholder="城市/区县"/></view>
+    <view class="field"><text class="label">详细交付地址（选填）</text><input data-field="address" value="{{form.address}}" bindinput="input" placeholder="街道、门牌号、园区或公司"/></view>
+    <view class="field"><text class="label">数量</text><input data-field="quantity" value="{{form.quantity}}" bindinput="input" type="number"/></view>
+    <view class="field"><text class="label">期望交期</text><picker mode="date" bindchange="expectedDate"><view>{{form.expectedDate || '请选择日期'}}</view></picker></view>
+    <view class="field"><text class="label">加工需求</text><textarea data-field="description" value="{{form.description}}" bindinput="input" placeholder="材料、尺寸、用途、表面要求等"/></view>
+    <view class="field"><text class="label">材料（选填）</text><input data-field="material" value="{{form.material}}" bindinput="input"/></view>
+    <view class="field"><text class="label">尺寸（选填）</text><input data-field="dimensions" value="{{form.dimensions}}" bindinput="input"/></view>
+    <view class="field"><text class="label">加工工艺（选填）</text><input data-field="process" value="{{form.process}}" bindinput="input" placeholder="例如：激光切割、折弯、焊接"/></view>
+    <view class="field"><text class="label">技术要求（选填）</text><textarea data-field="technicalRequirements" value="{{form.technicalRequirements}}" bindinput="input" placeholder="公差、表面处理、去毛刺等"/></view>
+    <view class="original-attachments" wx:if="{{sourceOrderId && originalAttachments.length}}">
+      <view class="row reuse-row"><view><text class="label">沿用原订单图纸</text><text class="muted">共{{originalAttachments.length}}个附件，可关闭后重新上传</text></view><switch checked="{{reuseOriginalAttachments}}" color="#0b8b86" bindchange="reuseOriginalAttachments"/></view>
+      <view wx:if="{{reuseOriginalAttachments}}"><view wx:for="{{originalAttachments}}" wx:key="id" class="list-item row"><text class="attachment-name">{{item.name}}</text><text class="muted">{{item.sizeText}}</text></view></view>
+    </view>
+    <button class="outline" bindtap="chooseImages">选择现场照片</button>
+    <button class="outline" bindtap="chooseFiles">选择图纸/多个附件</button>
+    <view wx:for="{{attachments}}" wx:key="path" class="list-item row attachment-row">
+      <text class="attachment-name">{{item.name}}</text>
+      <view class="attachment-actions"><text class="muted">{{item.sizeText}}</text><button class="attachment-remove" data-index="{{index}}" bindtap="removeAttachment" aria-label="删除{{item.name}}">×</button></view>
+    </view>
+    <text class="danger" wx:if="{{error}}">{{error}}</text>
+    <button wx:if="{{isBound}}" class="primary" loading="{{submitting}}" bindtap="submit">提交需求</button>
+    <button wx:else class="primary" loading="{{submitting}}" open-type="getPhoneNumber" bindgetphonenumber="authorizeAndSubmit">授权手机号并提交需求</button>
+  </view>
+</view>

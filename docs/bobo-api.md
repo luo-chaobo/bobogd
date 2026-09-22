@@ -21,18 +21,21 @@ X-Integration-Signature: <hex HMAC-SHA256>
 POST /api/external/work-orders
 ```
 
-请求包含 `externalOrderNumber`、`customer`、`phone`、`quantity`、`expectedDate`、`description` 和 `material`。`externalOrderNumber` 是幂等键；首次响应 `201`，重复请求响应 `200`，均返回稳定的 `orderId` 与 `workOrderId`。创建的工单为“待排产”，不自动指定工序和人员。
+请求包含核心必填字段 `externalOrderNumber`、`customer`、`phone`、`quantity` 和 `expectedDate`，以及选填字段 `description`、`material`、`dimensions`。选填字段未填写时发送空字符串，接收端必须按空值接受，不得因此拒绝建单。`externalOrderNumber` 是幂等键；首次响应 `201`，重复请求响应 `200`，均返回稳定的 `orderId` 与 `workOrderId`。创建的工单为“待排产”，不自动指定工序和人员。
 
 ## 波波回传公开进度
 
 波波配置：
 
 ```text
-FUTURE_WEBHOOK_URL=https://order.wljixie.com/api/integrations/bobo/events
+FUTURE_WEBHOOK_URL=https://test.wljixie.com/api/integrations/bobo/events
 BOBO_INTEGRATION_SECRET=<共享密钥>
 ```
 
-请求包含 `eventId`、`sequence`、`workOrderId`、`externalOrderNumber`、`type`、`occurredAt`、`status` 和可选的 `process`。公开事件包括 `process.updated`、`quality.ready`、`shipment.ready`、`shipment.shipped` 与 `delivery.completed`。未来机械按 `eventId` 去重、按 `sequence` 拒绝旧事件，只保存工序 ID、序号、名称、状态和起止时间。
+测试环境只填写测试域名；生产切换必须单独确认。波波报工落库时为平台订单排入 `process.updated`，后台以同一 `eventId` 重试，重启后继续发送。请求包含 `eventId`、`sequence`、`workOrderId`、`externalOrderNumber`、`type`、`occurredAt` 和 `process`；工序只含 ID、序号、名称、状态和起止时间，不含员工、工时、成本。未来机械按 `eventId` 去重、按每个订单的 `sequence` 拒绝旧事件。
+
+
+网站的订单号加手机号查询接口返回 `processes`，查询页面显示公开工序。历史报工不会自动重报；停掉本地波波服务后，可在波波目录运行 `node server.js --backfill-platform-order WL-20260915-0005`，只为该订单已有报工排入进度事件，重复执行不会重复入队。重启波波后查看本地 `data/db.json` 中 `platformWebhookEvents` 的 `status`；`delivered` 表示测试站已接受，`pending` 的 `lastError` 用于排障。若使用 MySQL 模式，不能使用此 JSON 回填命令。
 
 ## 联调原则
 

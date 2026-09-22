@@ -6,8 +6,28 @@ const path = require("node:path");
 
 const { createApplication } = require("../src/server");
 global.document = { getElementById: () => null };
-const { NAV_GROUPS, fileSelectionProblem, fileToAttachment, localDate, parseApiResponse, renderOrderResult, runLockedRequest } = require("../public/app");
+const { NAV_GROUPS, closeExpandedNavigation, copyFactoryAddress, fileSelectionProblem, fileToAttachment, handleNavigationPointerOver, localDate, parseApiResponse, renderOrderResult, runLockedRequest, shouldResetInitialScroll } = require("../public/app");
 delete global.document;
+
+test("closes a clicked navigation menu when another group is hovered", () => {
+  const first = {
+    blurred: false,
+    value: "true",
+    blur() { this.blurred = true; },
+    matches: () => true,
+    setAttribute(_name, value) { this.value = value; }
+  };
+  const second = { value: "false", setAttribute(_name, value) { this.value = value; } };
+  const hoveredGroup = { querySelector: () => second };
+  const target = { closest: () => hoveredGroup };
+  const nav = { contains: () => true, ownerDocument: { activeElement: first }, querySelectorAll: () => [first] };
+
+  handleNavigationPointerOver(nav, target);
+
+  assert.equal(first.value, "false");
+  assert.equal(first.blurred, true);
+  assert.equal(second.value, "false");
+});
 
 test("defines accessible deep links for the three priority navigation groups", () => {
   assert.deepEqual(NAV_GROUPS.map(({ label, items }) => [label, items.map(({ href }) => href)]), [
@@ -63,6 +83,72 @@ test("keeps desktop navigation aligned and preserves a hover path into dropdowns
   assert.match(styles, /\.nav-menu\s*\{[^}]*top:\s*100%/);
 });
 
+test("uses the confirmed electrical cabinet image and name on the home page", () => {
+  const home = fs.readFileSync(path.join(__dirname, "../public/index.html"), "utf8");
+  assert.match(home, /class="home-media case-card-media-contain" src="\/assets\/images\/case-electrical-control-cabinet\.jpg"[^>]*width="1792" height="2400"/);
+  assert.match(home, /<p class="eyebrow">CONTROL CABINET<\/p>\s*<h3>电控柜<\/h3>/);
+  assert.doesNotMatch(home, /新能源柜体/);
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(styles, /\.case-card img\.case-card-media-contain\s*\{[^}]*object-fit:\s*contain[^}]*object-position:\s*left center/);
+});
+
+test("keeps the home hero image full bleed with a seam-only gradient and restores mobile flow", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(styles, /\.home-hero\s*\{[^}]*position:\s*relative;[^}]*overflow:\s*hidden;/s);
+  assert.match(styles, /\.home-hero::after\s*\{[^}]*left:\s*0;[^}]*width:\s*70%;[^}]*linear-gradient\(90deg,[^;]*rgba\(14,\s*26,\s*36,\s*\.45\)[^;]*transparent[^;]*;/s);
+  assert.match(styles, /\.home-hero\s+\.hero-photo\s*\{[^}]*position:\s*absolute;[^}]*left:\s*0;[^}]*right:\s*auto;[^}]*width:\s*150%;[^}]*max-width:\s*none;[^}]*height:\s*100%;/s);
+  assert.match(styles, /@media \(max-width:\s*900px\)[\s\S]*?\.home-hero::after\s*\{\s*display:\s*none;\s*\}[\s\S]*?\.home-hero\s+\.hero-photo\s*\{[^}]*position:\s*static;[^}]*width:\s*100%;/s);
+  assert.match(styles, /@media \(max-width:\s*600px\)[\s\S]*?\.home-hero \.hero-stats\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+});
+
+test("centers the compact customer-service QR card between orange side rules", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(styles, /\.wechat-card\s*\{[^}]*width:\s*fit-content;[^}]*max-width:\s*100%;[^}]*margin:\s*26px auto 0;[^}]*border-left:\s*4px solid var\(--orange\);[^}]*border-right:\s*4px solid var\(--orange\);[^}]*text-align:\s*center;/s);
+  assert.match(styles, /\.wechat-card \.wecom-service-qr\s*\{[^}]*margin:\s*0 auto;/s);
+});
+
+test("uses the confirmed electrical cabinet for the nine-fold enclosure platform case", () => {
+  const platform = fs.readFileSync(path.join(__dirname, "../public/platform.html"), "utf8");
+  assert.match(platform, /<article><img class="platform-case-media-contain" src="\/assets\/images\/case-electrical-control-cabinet\.jpg" alt="九折型电箱" width="1792" height="2400" loading="lazy"><div><h3>九折型电箱<\/h3>/);
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(styles, /\.platform-case-grid img\.platform-case-media-contain\s*\{[^}]*object-fit:\s*contain[^}]*object-position:\s*left center/);
+});
+
+test("presents all five production stages in a filled two-row bento gallery", () => {
+  const platform = fs.readFileSync(path.join(__dirname, "../public/platform.html"), "utf8");
+  const stages = [
+    ["01", "process-design.jpg", "图纸设计", 961, 502],
+    ["02", "process-laser-cutting.jpg", "激光切割", 961, 502],
+    ["03", "process-bending.jpg", "数控折弯", 1920, 1279],
+    ["04", "process-welding.jpg", "焊接修整", 961, 502],
+    ["05", "finishing-line.jpg", "表面处理", 961, 502]
+  ];
+  assert.match(platform, /<ol class="platform-process-gallery">/);
+  for (const [step, filename, title, width, height] of stages) {
+    assert.match(platform, new RegExp(`<li><img[^>]*src="/assets/images/${filename}"[^>]*width="${width}" height="${height}"[^>]*><div><b>${step}</b><h3>${title}</h3><p>`));
+  }
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(styles, /\.platform-process-gallery\s*\{[^}]*grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(styles, /\.platform-process-gallery li:nth-child\(1\)\s*\{[^}]*grid-column:\s*span 5/);
+  assert.match(styles, /\.platform-process-gallery li:nth-child\(2\)\s*\{[^}]*grid-column:\s*span 7/);
+  assert.match(styles, /\.platform-process-gallery li:nth-child\(n \+ 3\)\s*\{[^}]*grid-column:\s*span 4/);
+  assert.match(styles, /\.platform-process-gallery li > div\s*\{[^}]*position:\s*absolute[^}]*bottom:\s*0[^}]*background:\s*linear-gradient/);
+  assert.match(styles, /@media \(max-width:\s*900px\)[\s\S]*?\.platform-process-gallery\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)[^}]*\}[\s\S]*?\.platform-process-gallery li:nth-child\(5\)\s*\{[^}]*grid-column:\s*1 \/ -1/);
+  assert.match(styles, /@media \(max-width:\s*600px\)[\s\S]*?\.platform-process-gallery\s*\{[^}]*grid-template-columns:\s*1fr[^}]*\}[\s\S]*?\.platform-process-gallery li:nth-child\(5\)\s*\{[^}]*grid-column:\s*auto/);
+});
+
+test("shows the WL logo in the factory page hero", () => {
+  const factory = fs.readFileSync(path.join(__dirname, "../public/factory.html"), "utf8");
+  assert.match(factory, /class="factory-hero-mark" src="\/assets\/brand\/wl-mark-transparent\.png"[^>]*width="1024" height="1024"/);
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(styles, /\.factory-page-hero\s*\{[^}]*position:\s*relative[^}]*overflow:\s*hidden/);
+  assert.doesNotMatch(styles, /\.factory-page-hero\s*\{[^}]*height:\s*420px/);
+  assert.match(styles, /\.factory-hero-mark\s*\{[^}]*position:\s*absolute[^}]*top:\s*50%[^}]*right:\s*max\(22px,\s*calc\(\(100vw - var\(--content-max\)\) \/ 2\)\)[^}]*width:\s*min\(45vw,\s*600px\)[^}]*height:\s*auto[^}]*transform:\s*translateY\(-50%\)/);
+  assert.match(styles, /@media \(max-width: 900px\)[\s\S]*?\.factory-page-hero\s*\{[^}]*height:\s*auto/);
+  assert.match(styles, /@media \(max-width: 900px\)[\s\S]*?\.factory-hero-mark\s*\{[^}]*position:\s*static[^}]*width:\s*min\(80vw,\s*300px\)[^}]*transform:\s*none/);
+  assert.doesNotMatch(styles, /\.factory-hero-mark\s*\{[^}]*(?:border|box-shadow):/);
+});
+
 test("uses the WL logo in public footers", () => {
   const publicDir = path.join(__dirname, "../public");
   const pages = fs.readdirSync(publicDir, { recursive: true })
@@ -86,12 +172,59 @@ test("routes every website order call to the transaction platform", () => {
   }
 });
 
-test("embeds the confirmed Gaode location on the contact page", () => {
+test("shows a local static factory location without third-party map navigation", () => {
   const contact = fs.readFileSync(path.join(__dirname, "../public/contact.html"), "utf8");
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
   assert.match(contact, /class="factory-map"/);
-  assert.match(contact, /<iframe[^>]*title="宁波未来机械高德地图位置"[^>]*src="https:\/\/www\.amap\.com\/search\?query=[^"]+"/);
-  assert.match(contact, /href="https:\/\/uri\.amap\.com\/search\?keyword=[^"]+"/);
+  assert.match(contact, /<img class="factory-map-image" src="\/assets\/images\/factory-location-map\.png" alt="宁波未来机械制造有限公司工厂位置地图" width="1695" height="928">/);
+  assert.match(contact, /<button[^>]*data-copy-address="宁波市北仑区柴桥街道河南顾106号"[^>]*>复制工厂地址<\/button>/);
+  assert.match(contact, /id="copy-address-status"[^>]*aria-live="polite"/);
+  assert.doesNotMatch(contact, /<iframe|amap\.com|第三方地图/);
   assert.match(contact, /宁波市北仑区柴桥街道河南顾106号/);
+  assert.match(styles, /\.factory-map-image\s*\{[^}]*display:\s*block;[^}]*width:\s*100%;[^}]*height:\s*auto;/s);
+  assert.ok(fs.existsSync(path.join(__dirname, "../public/assets/images/factory-location-map.png")));
+});
+
+test("serves the local factory location map", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "future-location-map-"));
+  const app = createApplication({ dbPath: path.join(directory, "test.sqlite"), uploadDir: path.join(directory, "uploads"), adminToken: "token" });
+  await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${app.server.address().port}/assets/images/factory-location-map.png`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/png");
+    assert.ok((await response.arrayBuffer()).byteLength > 100_000);
+  } finally {
+    await new Promise((resolve) => app.server.close(resolve));
+    app.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("resets only an unanchored contact page and copies the factory address", async () => {
+  assert.equal(shouldResetInitialScroll({ pathname: "/contact.html", hash: "" }), true);
+  assert.equal(shouldResetInitialScroll({ pathname: "/contact.html", hash: "#factory-location" }), false);
+  assert.equal(shouldResetInitialScroll({ pathname: "/news.html", hash: "" }), false);
+
+  let copied = "";
+  const status = { textContent: "" };
+  const success = await copyFactoryAddress("工厂地址", status, { writeText: async (value) => { copied = value; } });
+  assert.equal(success, true);
+  assert.equal(copied, "工厂地址");
+  assert.equal(status.textContent, "工厂地址已复制");
+
+  const failed = await copyFactoryAddress("工厂地址", status, { writeText: async () => { throw new Error("blocked"); } });
+  assert.equal(failed, false);
+  assert.equal(status.textContent, "复制失败，请长按地址文字复制：工厂地址");
+});
+
+test("shows the confirmed customer-service QR code on the contact page", () => {
+  const contact = fs.readFileSync(path.join(__dirname, "../public/contact.html"), "utf8");
+  const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+  assert.match(contact, /class="info-panel contact-wecom-card"[\s\S]*?<img class="wecom-service-qr" src="\/assets\/images\/wecom-customer-service-qr\.png" alt="微信扫码联系未来机械加工客服" width="400" height="400" loading="lazy">/);
+  assert.match(contact, /微信扫码联系加工客服[\s\S]*?工作时间：08:00–17:00/);
+  assert.doesNotMatch(contact, /企业微信二维码待提供/);
+  assert.match(styles, /\.contact-wecom-card\s*\{[^}]*display:\s*grid;[^}]*place-content:\s*center;[^}]*text-align:\s*center;/s);
 });
 
 function formFragment(html, id) {
@@ -127,6 +260,18 @@ test("renders order status data as text nodes instead of HTML", () => {
   assert.equal(card.children[2].children[0].children[1].textContent, "Invalid Date");
   assert.deepEqual(createdTags, ["div", "strong", "p", "ol", "li", "strong", "time"]);
   assert.equal(globalThis.pwned, false);
+});
+
+test("renders publicly shared process progress in an order lookup", () => {
+  const createElement = (tagName) => ({ tagName, children: [], textContent: "", append(...children) { this.children.push(...children); } });
+  const container = { children: [], ownerDocument: { createElement }, append(...children) { this.children.push(...children); } };
+  renderOrderResult(container, {
+    orderNumber: "WL-1", status: "production", events: [],
+    processes: [{ id: "route-1", name: "激光", status: "已完成", startedAt: "", completedAt: "" }]
+  });
+  const processSection = container.children[0].children[3];
+  assert.equal(processSection.children[0].textContent, "公开工序进度");
+  assert.equal(processSection.children[1].children[0].textContent, "激光：已完成");
 });
 
 test("keeps a file read failure specific to the selected file", async () => {
@@ -170,10 +315,11 @@ test("locks a form while its request is pending and restores the button afterwar
 
 test("blocks attachment selections beyond count and real byte limits", () => {
   const mib = 1024 * 1024;
-  assert.equal(fileSelectionProblem([{ name: "a.pdf", size: 10 * mib }, { name: "b.pdf", size: 10 * mib }, { name: "c.pdf", size: 10 * mib }]), null);
-  assert.equal(fileSelectionProblem([{ name: "a.pdf", size: 1 }, { name: "b.pdf", size: 1 }, { name: "c.pdf", size: 1 }, { name: "d.pdf", size: 1 }]), "附件最多3个");
+  assert.equal(fileSelectionProblem([{ name: "a.pdf", size: 10 * mib }, { name: "b.pdf", size: 10 * mib }, { name: "c.pdf", size: 10 * mib }, { name: "d.pdf", size: 10 * mib }]), null);
+  assert.equal(fileSelectionProblem(Array.from({ length: 6 }, (_, index) => ({ name: `${index}.pdf`, size: 1 }))), "附件最多5个");
   assert.equal(fileSelectionProblem([{ name: "large.pdf", size: 20 * mib + 1 }]), "单个附件不能超过20MB");
-  assert.equal(fileSelectionProblem([{ name: "a.pdf", size: 16 * mib }, { name: "b.pdf", size: 15 * mib }]), "附件总大小不能超过30MB");
+  assert.equal(fileSelectionProblem([{ name: "a.pdf", size: 20 * mib }, { name: "b.pdf", size: 20 * mib }]), null);
+  assert.equal(fileSelectionProblem([{ name: "a.pdf", size: 20 * mib }, { name: "b.pdf", size: 20 * mib }, { name: "c.pdf", size: 1 }]), "附件总大小不能超过40MB");
 });
 
 test("uses the browser local calendar date for expected delivery minimum", () => {
@@ -319,20 +465,22 @@ test("presents a complete industrial order-platform journey with accessible medi
     assert.match(platform, /type="radio" name="drawingMode" value="drawing" checked/);
     assert.match(platform, /type="radio" name="drawingMode" value="none"/);
     assert.match(platform, /name="attachments" type="file" multiple accept="\.pdf,\.jpg,\.jpeg,\.png,\.webp,\.dxf,\.dwg,\.step,\.stp,\.zip"/);
-    assert.match(platform, /最多3个、单个20MB、总计30MB/);
+    assert.match(platform, /最多5个、单个20MB、总计40MB/);
     const orderForm = formFragment(platform, "order-lookup-form");
     assert.match(orderForm, /data-api="\/api\/order-status"/);
     assert.match(orderForm, /name="orderNumber"[^>]*required/);
     assert.match(orderForm, /name="phone" inputmode="tel" required/);
     assert.match(platform, /<div class="mobile-actions"><a href="tel:13456125046">电话联系<\/a><a href="#order-center">订单查询<\/a><a class="active" href="#submit-inquiry">提交需求<\/a>/);
     const platformImages = {
-      "laser-equipment.jpg": [1600, 1066], "bending-equipment.jpg": [1600, 1066],
-      "welding-process.jpg": [961, 502], "finishing-line.jpg": [961, 502], "case-machine-cover.jpg": [800, 800], "case-control-cabinet.jpg": [1600, 1200]
+      "process-design.jpg": [961, 502], "process-laser-cutting.jpg": [961, 502],
+      "process-bending.jpg": [1920, 1279], "process-welding.jpg": [961, 502],
+      "finishing-line.jpg": [961, 502], "case-machine-cover.jpg": [800, 800],
+      "case-electrical-control-cabinet.jpg": [1792, 2400]
     };
     for (const [filename, [width, height]] of Object.entries(platformImages)) {
       assert.match(platform, new RegExp(`src="/assets/images/${filename}"[^>]*alt="[^"]+"[^>]*width="${width}" height="${height}"`));
     }
-    assert.equal([...platform.matchAll(/loading="lazy"/g)].length, 6);
+    assert.equal([...platform.matchAll(/loading="lazy"/g)].length, 8);
     const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
     assert.match(styles, /#service-entry,[\s\S]*?#evidence,[\s\S]*?#submit-inquiry,[\s\S]*?#order-center,[\s\S]*?#no-drawing\s*\{\s*scroll-margin-top:\s*96px/);
     assert.match(styles, /@media \(max-width: 900px\)\s*\{[\s\S]*?#service-entry,[\s\S]*?#evidence,[\s\S]*?#submit-inquiry,[\s\S]*?#order-center,[\s\S]*?#no-drawing\s*\{\s*scroll-margin-top:\s*156px/);
@@ -387,14 +535,24 @@ test("serves every public page with its own metadata and shared conversion actio
 
     const home = await fetch(baseUrl);
     const homeText = await home.text();
-    assert.match(homeText, /企业微信二维码待提供/);
+    assert.match(homeText, /<img[^>]*class="wecom-service-qr"[^>]*src="\/assets\/images\/wecom-customer-service-qr\.png"[^>]*alt="微信扫码联系未来机械加工客服"/);
     assert.match(homeText, /application\/ld\+json/);
+
+    const platform = await fetch(`${baseUrl}/platform.html`);
+    const platformText = await platform.text();
+    assert.match(platformText, /<aside class="quote-intro">.*<img[^>]*class="wecom-service-qr"[^>]*src="\/assets\/images\/wecom-customer-service-qr\.png"[^>]*alt="微信扫码联系未来机械加工客服"/s);
+
+    const serviceQr = await fetch(`${baseUrl}/assets/images/wecom-customer-service-qr.png`);
+    assert.equal(serviceQr.status, 200);
+    assert.match(serviceQr.headers.get("content-type"), /image\/png/);
+    assert.ok((await serviceQr.arrayBuffer()).byteLength > 1000);
 
     const quote = await fetch(`${baseUrl}/quote.html`);
     const quoteText = await quote.text();
     assert.match(quoteText, /id="inquiry-form"/);
     assert.match(quoteText, /action="\/api\/inquiries"/);
-    assert.match(quoteText, /最多3个、单个20MB、总计30MB/);
+    assert.match(quoteText, /name="address"/);
+    assert.match(quoteText, /最多5个、单个20MB、总计40MB/);
 
     const tracking = await fetch(`${baseUrl}/tracking.html`);
     const trackingText = await tracking.text();
@@ -405,8 +563,12 @@ test("serves every public page with its own metadata and shared conversion actio
     const adminText = await admin.text();
     assert.equal(admin.status, 200);
     assert.match(adminText, /客服工作台/);
-    assert.match(adminText, /id="admin-token"/);
+    assert.match(adminText, /id="wecom-login"/);
+    assert.doesNotMatch(adminText, /id="admin-token"/);
     assert.match(adminText, /id="order-list"/);
+    const adminTools = await fetch(`${baseUrl}/admin-tools.js`);
+    assert.equal(adminTools.status, 200);
+    assert.match(adminTools.headers.get("content-type"), /application\/javascript/);
 
     const image = await fetch(`${baseUrl}/assets/images/factory-workshop.jpg`);
     assert.equal(image.status, 200);
@@ -416,6 +578,10 @@ test("serves every public page with its own metadata and shared conversion actio
     const robots = await fetch(`${baseUrl}/robots.txt`);
     assert.equal(robots.status, 200);
     assert.match(await robots.text(), /Sitemap: https:\/\/wljixie\.com\/sitemap\.xml/);
+
+    const wechatVerification = await fetch(`${baseUrl}/feKCc7G0cA.txt`);
+    assert.equal(wechatVerification.status, 200);
+    assert.equal((await wechatVerification.text()).trim(), "feKCc7G0cA");
 
     const sitemap = await fetch(`${baseUrl}/sitemap.xml`);
     assert.equal(sitemap.status, 200);
@@ -460,14 +626,14 @@ test("presents the corporate homepage journey with valid media, conversion actio
       "welding-process.jpg": [961, 502],
       "finishing-line.jpg": [961, 502],
       "case-machine-cover.jpg": [800, 800],
-      "case-control-cabinet.jpg": [1600, 1200],
+      "case-electrical-control-cabinet.jpg": [1792, 2400],
       "factory-floor.jpg": [1600, 1066]
     };
-    assert.equal([...home.matchAll(/<img\b/g)].length, Object.keys(assets).length + 2);
+    assert.equal([...home.matchAll(/<img\b/g)].length, Object.keys(assets).length + 3);
     for (const [filename, [width, height]] of Object.entries(assets)) {
       assert.match(home, new RegExp(`src="/assets/images/${filename}"[^>]*alt="[^"]+"[^>]*width="${width}" height="${height}"`));
     }
-    assert.equal([...home.matchAll(/loading="lazy"/g)].length, 7);
+    assert.equal([...home.matchAll(/loading="lazy"/g)].length, 8);
 
     const styles = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
     for (const token of ["--ink", "--line", "--muted", "--orange", "--shadow", "--steel"]) {
@@ -489,7 +655,8 @@ test("presents the corporate homepage journey with valid media, conversion actio
     assert.match(styles, /\.page-hero \.eyebrow,[\s\S]*?color:\s*#ff9a6c/);
     assert.match(styles, /\.promise-bar\s*\{[^}]*display:\s*grid[^}]*grid-template-columns/);
     assert.match(styles, /\.service-grid\s*\{[^}]*display:\s*grid[^}]*minmax\(280px, 1fr\)/);
-    assert.match(styles, /@media\s*\(max-width:\s*600px\)\s*\{[\s\S]*?\.admin-page #load-admin\s*\{[^}]*display:\s*inline-flex/);
+    assert.match(styles, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+    assert.match(styles, /\.admin-page #admin-user\s*\{[^}]*display:\s*flex/);
   } finally {
     await new Promise((resolve) => app.server.close(resolve));
     app.close();
@@ -550,6 +717,63 @@ test("uses the 1320px desktop system and curated local imagery", () => {
   }
 });
 
+test("publishes twelve illustrated and linked sheet-metal knowledge articles", () => {
+  const publicDir = path.join(__dirname, "../public");
+  const news = fs.readFileSync(path.join(publicDir, "news.html"), "utf8");
+  const articles = [
+    "no-drawing-quote",
+    "sheet-metal-material-selection",
+    "bending-rfq-requirements",
+    "rush-order-lead-time",
+    "powder-coating-requirements",
+    "drawing-version-control",
+    "laser-cutting-quote-factors",
+    "sheet-metal-tolerance-guide",
+    "welding-distortion-control",
+    "enclosure-rfq-checklist",
+    "prototype-to-production",
+    "sheet-metal-packaging"
+  ];
+
+  assert.equal((news.match(/<article class="card news-card"/g) || []).length, 12);
+  const sitemap = fs.readFileSync(path.join(publicDir, "sitemap.xml"), "utf8");
+  const newArticleImages = new Map([
+    ["laser-cutting-quote-factors", "news-laser-quote.jpg"],
+    ["sheet-metal-tolerance-guide", "news-tolerance-inspection.jpg"],
+    ["welding-distortion-control", "news-welding-fixture.jpg"],
+    ["enclosure-rfq-checklist", "news-enclosure-assembly.jpg"],
+    ["prototype-to-production", "news-prototype-review.jpg"],
+    ["sheet-metal-packaging", "news-packaging-workshop.jpg"]
+  ]);
+  const styles = fs.readFileSync(path.join(publicDir, "styles.css"), "utf8");
+  assert.match(styles, /\.article-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*820px\)\s+minmax\(320px,\s*440px\)/);
+  assert.match(styles, /\.article-visual\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*120px/);
+  assert.match(styles, /@media \(max-width:\s*900px\)[\s\S]*?\.article-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr[\s\S]*?\.article-visual\s*\{[\s\S]*?position:\s*static/);
+
+  for (const slug of articles) {
+    const href = `/news/${slug}.html`;
+    assert.match(news, new RegExp(`<a class="news-card-link" href="${href.replaceAll("/", "\\/")}"`));
+    const html = fs.readFileSync(path.join(publicDir, href), "utf8");
+    assert.match(html, /<meta name="description" content="[^"]+">/);
+    assert.match(html, new RegExp(`<link rel="canonical" href="https:\\/\\/wljixie\\.com${href.replaceAll("/", "\\/")}">`));
+    assert.doesNotMatch(html, /class="article-figure"/);
+    assert.match(html, /<div class="section article-layout">[\s\S]*?<article class="article-body">[\s\S]*?<aside class="article-visual"[^>]*>/);
+    const imagePath = html.match(/<aside class="article-visual"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"[^>]+alt="[^"]+"[^>]+width="\d+" height="\d+"/)[1];
+    assert.ok(fs.existsSync(path.join(publicDir, imagePath)), `${slug} illustration must exist`);
+    if (newArticleImages.has(slug)) {
+      const filename = newArticleImages.get(slug);
+      assert.equal(imagePath, `/assets/images/${filename}`);
+      assert.match(news, new RegExp(`src="/assets/images/${filename}"[^>]*loading="lazy"`));
+    }
+    assert.ok((html.match(/<h2>/g) || []).length >= 4, `${slug} needs at least four sections`);
+    assert.match(html, /具体要求以项目确认结果为准/);
+    assert.match(html, /href="\/news\.html"[^>]*>返回资讯中心/);
+    assert.match(html, /href="\/platform\.html"[^>]*>提交加工需求/);
+    assert.match(html, /href="\/contact\.html"[^>]*>联系客服/);
+    assert.match(sitemap, new RegExp(`https:\\/\\/wljixie\\.com${href.replaceAll("/", "\\/")}`));
+  }
+});
+
 test("uses the approved WL brand mark across public website headers", () => {
   const publicDir = path.join(__dirname, "../public");
   const pages = fs.readdirSync(publicDir, { recursive: true })
@@ -591,4 +815,44 @@ test("ships the selected 3D WL logo application suite", () => {
   }
   const home = fs.readFileSync(path.join(base, "public/index.html"), "utf8");
   assert.match(home, /rel="icon" href="\/assets\/brand\/wl-favicon-32\.png"/);
+});
+
+test("fits the mini program home on a standard portrait screen", () => {
+  const base = path.join(__dirname, "..");
+  const home = fs.readFileSync(path.join(base, "miniprogram/pages/home/index.wxml"), "utf8");
+  const styles = fs.readFileSync(path.join(base, "miniprogram/app.wxss"), "utf8");
+
+  assert.match(home, /class="brand-hero-top"[\s\S]*class="brand-hero-logo"/);
+  assert.match(home, /class="brand-hero-copy"[\s\S]*class="primary hero-button"/);
+  assert.match(home, /class="title"><text>让每一张图纸<\/text><text>成为可交付的零件<\/text><\/view>/);
+  assert.doesNotMatch(home, /让每一张图纸，/);
+  assert.match(home, /class="primary hero-button" bindtap="order"/);
+  assert.match(home, /class="card row" bindtap="orders"/);
+  assert.match(styles, /\.home-page\s*\{[^}]*padding:\s*24rpx;/);
+  assert.match(styles, /\.brand-hero\s*\{[^}]*height:\s*640rpx;/);
+  assert.match(styles, /\.brand-hero-image\s*\{[^}]*width:\s*1138rpx;[^}]*height:\s*640rpx;[^}]*left:\s*-20rpx;/);
+  assert.doesNotMatch(styles, /\.brand-hero-image\s*\{[^}]*object-position:/);
+  assert.match(styles, /\.brand-hero-top\s*\{[^}]*position:\s*absolute;[^}]*top:\s*40rpx;[^}]*left:\s*10rpx;/);
+  assert.match(styles, /\.brand-hero-logo\s*\{[^}]*width:\s*282rpx;[^}]*height:\s*282rpx;/);
+  assert.match(styles, /\.brand-hero \.title text\s*\{[^}]*display:\s*block;/);
+  assert.match(styles, /\.brand-hero \.subtitle\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*font-size:\s*24rpx;[^}]*white-space:\s*nowrap;/);
+  assert.match(styles, /\.hero-button\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*360rpx;[^}]*margin:\s*28rpx auto 0;/);
+  assert.match(styles, /\.home-page \.promise-grid\s*\{[^}]*margin:\s*16rpx 0;/);
+  assert.match(styles, /\.home-page \.card\s*\{[^}]*margin-top:\s*16rpx;[^}]*padding:\s*22rpx;/);
+  assert.match(styles, /\.home-page \.list-item\s*\{[^}]*padding:\s*16rpx 0;/);
+});
+
+test("uses Chinese company branding on login and profile pages", () => {
+  const base = path.join(__dirname, "..");
+  const login = fs.readFileSync(path.join(base, "miniprogram/pages/login/index.wxml"), "utf8");
+  const profile = fs.readFileSync(path.join(base, "miniprogram/pages/profile/index.wxml"), "utf8");
+  const styles = fs.readFileSync(path.join(base, "miniprogram/app.wxss"), "utf8");
+
+  assert.match(login, /<text class="eyebrow login-brand">宁波未来机械<\/text>/);
+  assert.doesNotMatch(login, /FUTURE MACHINERY/);
+  assert.match(profile, /class="page profile-page"/);
+  assert.match(profile, /<text class="company-footer">宁波未来机械制造有限公司<\/text>/);
+  assert.match(styles, /\.profile-page\s*\{[^}]*min-height:\s*100vh;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/);
+  assert.match(styles, /\.login-brand\s*\{[^}]*font-size:\s*26rpx;/);
+  assert.match(styles, /\.company-footer\s*\{[^}]*margin-top:\s*auto;[^}]*color:\s*#8a969f;[^}]*text-align:\s*center;[^}]*font-size:\s*26rpx;/);
 });
