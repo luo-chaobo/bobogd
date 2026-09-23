@@ -4,9 +4,9 @@ const ORDER_STATUS_TEXT = Object.freeze({
   paid: "已付款",
   production: "生产中",
   quality: "质检中",
-  ready: "待交付",
-  shipped: "已发货",
-  completed: "已完成"
+  ready: "待配送",
+  shipped: "配送中",
+  completed: "已送达"
 });
 
 function chinaDateTime(value) {

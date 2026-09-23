@@ -35,6 +35,15 @@ test("refresh controller skips hidden or busy states", async () => {
   assert.equal(calls, 1);
 });
 
+test("synchronizes an order list row with the freshly loaded drawer detail", () => {
+  const cells = Array.from({ length: 4 }, () => ({ textContent: "", replaceChildren(value) { this.value = value; } }));
+  const badge = { textContent: "已送达" };
+  assert.equal(tools.syncOrderRow({ cells }, { status: "completed", currentProcess: "工序已全部完成" }, () => badge), true);
+  assert.equal(cells[2].value, badge);
+  assert.equal(cells[3].textContent, "工序已全部完成");
+  assert.equal(tools.syncOrderRow(null, {}, () => badge), false);
+});
+
 test("parses common ASCII DXF entities into preview primitives", () => {
   const drawing = tools.parseDxf(`0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n20\n21\n10\n0\nLWPOLYLINE\n70\n1\n10\n0\n20\n0\n10\n10\n20\n0\n10\n10\n20\n10\n0\nCIRCLE\n10\n5\n20\n5\n40\n2\n0\nARC\n10\n8\n20\n8\n40\n3\n50\n0\n51\n90\n0\nENDSEC\n0\nEOF`);
   assert.deepEqual(drawing.entities.map((item) => item.type), ["line", "polyline", "circle", "arc"]);
@@ -122,6 +131,12 @@ test("translates audit action codes and structured details into Chinese business
   assert.equal(tools.formatAuditDetail("order:5;quote:9;amount:1900"), "订单 #5 · 报价 #9 · 金额 ¥1,900.00");
   assert.equal(tools.formatAuditDetail("payment:7;amount:3000"), "付款记录 #7 · 金额 ¥3,000.00");
   assert.equal(tools.formatAuditDetail("production:波波回传暂时中断"), "生产中 · 波波回传暂时中断");
+  assert.equal(tools.formatAuditDetail(JSON.stringify({ kind: "bobo_webhook", eventType: "process.updated", eventId: "evt-1", process: { name: "激光", status: "已完成" } })), "工序：激光 · 已完成 · 事件 evt-1");
+  assert.equal(tools.formatAuditDetail(JSON.stringify({ kind: "bobo_webhook", eventType: "shipment.shipped", eventId: "evt-2" })), "配送状态：配送中 · 事件 evt-2");
+  assert.equal(tools.formatAuditDetail(JSON.stringify({ kind: "bobo_webhook", eventType: "delivery.completed", eventId: "evt-3", deliveredAt: "2026-09-22T15:02:00.000Z" })), "配送状态：已送达 · 事件 evt-3");
+  assert.equal(tools.formatAuditDetail("process.updated:legacy-1"), "生产工序已更新 · 事件 legacy-1");
+  assert.equal(tools.formatAuditDetail("shipment.shipped:legacy-2"), "配送状态：配送中 · 事件 legacy-2");
+  assert.equal(tools.formatAuditDetail("delivery.completed:legacy-3"), "配送状态：已送达 · 事件 legacy-3");
   assert.equal(tools.formatAuditDetail("金额截图不清晰"), "金额截图不清晰");
 });
 

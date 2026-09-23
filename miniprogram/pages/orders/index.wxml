@@ -1,5 +1,5 @@
 <view class="page">
-  <view class="hero"><text class="eyebrow">MY ORDERS</text><text class="title">我的订单</text><text class="subtitle">查看进行中和已完成的订单。</text></view>
+  <view class="hero"><text class="eyebrow">MY ORDERS</text><text class="title">我的订单</text><text class="subtitle">查看进行中和已送达的订单。</text></view>
   <view class="order-tabs">
     <view class="order-tab {{scope === 'active' ? 'order-tab-active' : ''}}" data-scope="active" bindtap="switchScope">进行中</view>
     <view class="order-tab {{scope === 'history' ? 'order-tab-active' : ''}}" data-scope="history" bindtap="switchScope">历史订单</view>

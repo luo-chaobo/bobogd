@@ -39,6 +39,13 @@
     return { run, start, stop };
   }
 
+  function syncOrderRow(row, detail, createBadge) {
+    if (!row?.cells || row.cells.length < 4) return false;
+    row.cells[2].replaceChildren(createBadge(detail.status, detail.statusText));
+    row.cells[3].textContent = detail.currentProcess;
+    return true;
+  }
+
   function parseDxf(source) {
     const text = String(source || "");
     if (/AutoCAD Binary DXF/i.test(text)) throw new Error("暂不支持二进制 DXF 预览");
@@ -208,7 +215,7 @@
     create_order: "生成正式订单", confirm_payment: "确认历史收款", register_payment: "登记收款", verify_payment: "确认到账",
     reject_payment: "驳回收款", void_payment: "作废收款", create_payment_receipt: "生成收据", manual_progress_override: "更新履约状态",
     confirm_bobo_sync: "首次同步波波", auto_submit_bobo_sync: "到账后自动提交波波同步", retry_bobo_sync: "重试波波同步", retry_notification: "重试消息通知", bobo_order_synced: "波波同步成功",
-    wecom_alert_failed: "企业微信告警失败", webhook_event: "接收波波回调", mock_login: "模拟登录", bind_phone: "绑定手机号",
+    wecom_alert_failed: "企业微信告警失败", webhook_event: "接收波波回调", bobo_status_repair: "修复波波履约状态", mock_login: "模拟登录", bind_phone: "绑定手机号",
     stage_upload: "暂存附件", subscription: "更新订阅", create_inquiry: "提交询价", update_inquiry: "更新询价",
     request_inquiry_change: "申请修改询价", supplement_inquiry: "补充询价资料"
   };
@@ -220,7 +227,21 @@
   function formatAuditDetail(detail) {
     const source = String(detail || "").trim();
     if (!source) return "—";
-    const statusNames = { awaiting_payment: "待付款", awaiting_schedule: "待排产", production: "生产中", quality: "质检中", ready: "待交付", shipped: "已发货", completed: "已完成" };
+    try {
+      const parsed = JSON.parse(source);
+      if (parsed.kind === "bobo_webhook") {
+        const suffix = parsed.eventId ? ` · 事件 ${parsed.eventId}` : "";
+        if (parsed.eventType === "process.updated") return `工序：${parsed.process?.name || "未命名工序"} · ${parsed.process?.status || "状态已更新"}${suffix}`;
+        if (parsed.eventType === "shipment.shipped") return `配送状态：配送中${suffix}`;
+        if (parsed.eventType === "delivery.completed") return `配送状态：已送达${suffix}`;
+      }
+    } catch {}
+    const legacyBobo = source.match(/^(process\.updated|shipment\.shipped|delivery\.completed):(.+)$/);
+    if (legacyBobo) {
+      const names = { "process.updated": "生产工序已更新", "shipment.shipped": "配送状态：配送中", "delivery.completed": "配送状态：已送达" };
+      return `${names[legacyBobo[1]]} · 事件 ${legacyBobo[2]}`;
+    }
+    const statusNames = { awaiting_payment: "待付款", awaiting_schedule: "待排产", production: "生产中", quality: "质检中", ready: "待配送", shipped: "配送中", completed: "已送达" };
     const statusSeparator = source.indexOf(":");
     const status = source.slice(0, statusSeparator);
     if (statusNames[status]) return `${statusNames[status]} · ${source.slice(statusSeparator + 1)}`;
@@ -253,5 +274,5 @@
     return { ...definition, reference: context.reference || "" };
   }
 
-  return { createRefreshController, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition };
+  return { createRefreshController, syncOrderRow, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition };
 });

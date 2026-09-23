@@ -90,6 +90,7 @@ test("public order projection excludes internal and payment details", () => {
     orderNumber: "WL-20260829-0001",
     contactName: "王先生",
     status: "production",
+    statusText: "生产中",
     events: [{ status: "production", title: "生产中", occurredAt: "2026-08-29T10:00:00.000Z" }]
   });
 });

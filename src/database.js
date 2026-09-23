@@ -264,6 +264,10 @@ function openDatabase(file) {
   addColumn(db, "orders", "bobo_sync_status", "TEXT NOT NULL DEFAULT 'pending'");
   addColumn(db, "orders", "bobo_last_sequence", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "orders", "bobo_all_processes_completed", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "bobo_webhook_events", "event_type", "TEXT NOT NULL DEFAULT ''");
+  addColumn(db, "bobo_webhook_events", "occurred_at", "TEXT NOT NULL DEFAULT ''");
+  addColumn(db, "bobo_webhook_events", "payload_json", "TEXT NOT NULL DEFAULT '{}'");
+  addColumn(db, "bobo_webhook_events", "applied_status", "TEXT NOT NULL DEFAULT ''");
   addColumn(db, "audit_logs", "actor_user_id", "TEXT NOT NULL DEFAULT ''");
   addColumn(db, "audit_logs", "actor_role", "TEXT NOT NULL DEFAULT ''");
   addColumn(db, "payments", "proof_original_name", "TEXT NOT NULL DEFAULT ''");

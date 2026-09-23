@@ -10,9 +10,9 @@ const STATUS_LABELS: Record<string, string> = {
   production: "生产中",
   in_progress: "生产中",
   quality: "质检中",
-  ready: "待交付",
-  shipped: "已发货",
-  completed: "已完成",
+  ready: "待配送",
+  shipped: "配送中",
+  completed: "已送达",
   pending: "待开始"
 };
 
@@ -30,7 +30,7 @@ export function statusText(value: unknown) {
 
 export function withStatusText<T extends { status?: unknown; state?: unknown }>(item: T) {
   const value = item.state === "draft" ? item.state : item.status || item.state;
-  return { ...item, statusText: statusText(value) };
+  return { ...item, statusText: String((item as any).statusText || statusText(value)) };
 }
 
 export function formatPublicDateTime(value: unknown) {

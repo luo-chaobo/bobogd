@@ -1,9 +1,9 @@
 const state = { session: null, view: "dashboard", pendingWrites: 0, detail: null, detailItem: null, payments: new Map(), action: null, refreshingDetail: false, previewUrl: "", dxfPreview: null, refreshController: null };
-const { createRefreshController, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition } = window.AdminTools;
+const { createRefreshController, syncOrderRow, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition } = window.AdminTools;
 const labels = {
   new: "待认领", claimed: "跟进中", quoted: "已报价", ordered: "已转订单", closed: "已关闭", draft: "草稿", confirmed: "已确认", change_requested: "变更待处理",
   awaiting_payment: "待付款", awaiting_schedule: "待排产", production: "生产中", quality: "质检中",
-  ready: "待交付", shipped: "已发货", completed: "已完成", paid: "已付清",
+  ready: "待配送", shipped: "配送中", completed: "已送达", paid: "已付清",
   unpaid: "未付款", partial_paid: "部分付款", pending_review: "待核验", pending: "待核验",
   verified: "已确认", rejected: "已驳回", voided: "已作废", not_ready: "未到同步条件",
   awaiting_confirmation: "待确认同步", retrying: "同步异常", synced: "已同步"
@@ -19,7 +19,7 @@ function byId(id) { return document.getElementById(id); }
 function element(tag, text = "", className = "") { const item = document.createElement(tag); item.textContent = String(text ?? ""); item.className = className; return item; }
 function money(value) { return `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function dateTime(value) { return value ? new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)) : "—"; }
-function badge(value) { return element("span", labels[value] || value || "—", `admin-badge status-${value || "unknown"}`); }
+function badge(value, text = "") { return element("span", text || labels[value] || value || "—", `admin-badge status-${value || "unknown"}`); }
 function boboBadge(value) { return element("span", boboLabels[value] || value || "—", `admin-badge status-${value || "unknown"}`); }
 function cell(...children) { const item = document.createElement("td"); item.append(...children); return item; }
 function stacked(primary, secondary = "") { const item = element("div", "", "admin-cell"); item.append(element("strong", primary), element("small", secondary)); return item; }
@@ -71,8 +71,8 @@ async function loadDashboard() {
     ["定金已收待排产", metrics.depositReadyForScheduling, "orders"],
     ["尾款待收", metrics.balancesOutstanding, "orders"],
     ["波波同步异常", metrics.boboSyncErrors, "todos"],
-    ["即将交付订单", metrics.deliveringSoon, "orders"],
-    ["今日完成订单", metrics.completedToday, "orders"]
+    ["待配送订单", metrics.deliveringSoon, "orders"],
+    ["今日送达订单", metrics.completedToday, "orders"]
   ];
   const cards = definitions.map(([label, value, view], index) => {
     const card = element("button", "", `admin-metric metric-${index + 1}`);
@@ -114,7 +114,7 @@ async function loadOrders() {
     const row = document.createElement("tr");
     row.dataset.openOrder = item.id;
     row.append(
-      cell(stacked(item.orderNumber, item.inquiryNumber)), cell(stacked(item.contactName, item.phone)), cell(badge(item.status)), cell(element("span", item.currentProcess)),
+      cell(stacked(item.orderNumber, item.inquiryNumber)), cell(stacked(item.contactName, item.phone)), cell(badge(item.status, item.statusText)), cell(element("span", item.currentProcess)),
       cell(badge(item.paymentStatus)), cell(stacked(`${money(item.payment.totalAmount)} / ${money(item.payment.verifiedAmount)}`, `未收 ${money(item.payment.remainingAmount)}`)),
       cell(boboBadge(item.boboSyncStatus)), cell(element("span", dateTime(item.createdAt))), cell(actionButton("查看", "open-order", item.id))
     );
@@ -303,6 +303,7 @@ function paymentProofCard(payment, compact = false) {
 
 async function openOrder(id) {
   const item = await api(`/api/admin/orders/${id}`);
+  syncOrderRow(document.querySelector(`[data-open-order="${Number(id)}"]`), item, badge);
   const actions = element("div", "", "admin-detail-actions");
   const registrationState = paymentRegistrationState(item.payment);
   if (["initial", "followup"].includes(registrationState)) actions.append(actionButton(registrationState === "initial" ? "登记收款" : "登记后续收款", "register-payment", id, true));
@@ -317,7 +318,7 @@ async function openOrder(id) {
     if (["retrying", "failed"].includes(item.boboSyncStatus)) actions.append(actionButton("重试波波同步", "retry-bobo", id));
   }
   if (state.session.user.role === "super_admin") {
-    const next = { awaiting_schedule: ["production", "进入生产"], production: ["quality", "进入质检"], quality: ["ready", "进入待交付"], ready: ["shipped", "确认已发货"], shipped: ["completed", "确认已完成"] }[item.status];
+    const next = { awaiting_schedule: ["production", "进入生产"], production: ["quality", "进入质检"], quality: ["ready", "进入待配送"], ready: ["shipped", "确认配送中"], shipped: ["completed", "确认已送达"] }[item.status];
     if (next) actions.append(actionButton(next[1], "advance-order", `${id}:${next[0]}`));
   }
 
@@ -355,7 +356,7 @@ async function openOrder(id) {
   openDrawer(
     item.orderNumber,
     actions,
-    detailSection("订单信息", [["来源询价", item.inquiryNumber], ["客户", item.contactName], ["手机号", item.phone], ["地区", item.region], ["详细地址", item.address], ["履约状态", labels[item.status] || item.status], ["当前工序", item.currentProcess], ["波波同步", boboLabels[item.boboSyncStatus] || item.boboSyncStatus]]),
+    detailSection("订单信息", [["来源询价", item.inquiryNumber], ["客户", item.contactName], ["手机号", item.phone], ["地区", item.region], ["详细地址", item.address], ["履约状态", item.statusText || labels[item.status] || item.status], ["当前工序", item.currentProcess], ["波波同步", boboLabels[item.boboSyncStatus] || item.boboSyncStatus]]),
     detailSection("确认报价", [["报价版本", `V${item.quote.version || "—"}`], ["报价金额", money(item.quote.amount)], ["有效期", item.quote.validUntil], ["确认人", item.quote.operator]]),
     detailSection("冻结需求", [["描述", item.requirement.description], ["材料", item.requirement.material], ["厚度", item.requirement.thickness], ["尺寸", item.requirement.dimensions], ["加工工艺", item.requirement.process], ["数量", item.requirement.quantity], ["交期", item.requirement.expectedDate], ["技术要求", item.requirement.technicalRequirements], ["备注", item.requirement.remark]]),
     detailSection("付款汇总", [["付款条件", item.payment.mode === "deposit" ? "定金后开工，发货前付清" : "全款后开工"], ["订单总额", money(item.payment.totalAmount)], ["约定开工款", money(item.payment.startAmount)], ["已确认到账", money(item.payment.verifiedAmount)], ["待核验", money(item.payment.pendingAmount)], ["剩余未收", money(item.payment.remainingAmount)]]),

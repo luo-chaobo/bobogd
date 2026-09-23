@@ -4,8 +4,9 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const { nextNumber, openDatabase } = require("./database");
-const { ALLOWED_EXTENSIONS, MAX_ATTACHMENT_SIZE, actualAttachmentSize, canConfirmPayment, canEnterProduction, canShip, normalizePhone, publicOrder, PUBLIC_STATUS_DICTIONARY, validateInquiry, validatePublicEventTitle } = require("./domain");
+const { ALLOWED_EXTENSIONS, MAX_ATTACHMENT_SIZE, ORDER_STATUS_TEXT, actualAttachmentSize, canConfirmPayment, canEnterProduction, canShip, normalizePhone, publicOrder, PUBLIC_STATUS_DICTIONARY, validateInquiry, validatePublicEventTitle } = require("./domain");
 const { createWechatSubscriptionSender } = require("./wechat-subscription");
+const { version: applicationVersion } = require("../package.json");
 
 const MAX_BODY_SIZE = 60 * 1024 * 1024;
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -115,6 +116,13 @@ function currentProcessLabel(order, processes) {
   const active = processes.find((item) => item.status !== "已完成");
   if (active) return `${active.name} · ${active.status}`;
   return `${processes.at(-1).name}已完成，等待下一工序`;
+}
+
+function boboAuditDetail(event) {
+  const detail = { kind: "bobo_webhook", eventType: String(event.type || ""), eventId: String(event.eventId || "") };
+  if (event.type === "process.updated") detail.process = { name: String(event.process?.name || ""), status: String(event.process?.status || "") };
+  if (event.type === "delivery.completed") detail.deliveredAt = String(event.delivery?.deliveredAt || event.occurredAt || "");
+  return JSON.stringify(detail);
 }
 
 function serveStatic(request, response, pathname) {
@@ -621,7 +629,7 @@ function createApplication(options = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/health") {
-      return sendJson(response, 200, { status: "ok", service: "future-machinery-website" });
+      return sendJson(response, 200, { status: "ok", service: "future-machinery-website", version: applicationVersion });
     }
 
     if (request.method === "GET" && url.pathname === "/api/status-dictionary") {
@@ -650,35 +658,43 @@ function createApplication(options = {}) {
       if (!order) return sendJson(response, 404, { message: "订单不存在" });
       const sequence = Number(event.sequence || 0);
       if (!Number.isSafeInteger(sequence) || sequence <= Number(order.bobo_last_sequence || 0)) return sendJson(response, 409, { message: "事件序号已过期" });
-      const process = event.process || {};
-      if (process.id && process.name && process.status) {
-        db.prepare(`INSERT INTO public_processes (order_id, process_id, sequence, name, status, started_at, completed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(order_id, process_id) DO UPDATE SET sequence = excluded.sequence, name = excluded.name, status = excluded.status, started_at = excluded.started_at, completed_at = excluded.completed_at`)
-          .run(order.id, String(process.id), Number(process.sequence || sequence), String(process.name).slice(0, 60), String(process.status).slice(0, 20), String(process.startedAt || ""), String(process.completedAt || ""));
-      }
       const statusByType = { "quality.ready": "quality", "shipment.ready": "ready", "shipment.shipped": "shipped", "delivery.completed": "completed" };
       const processStatus = event.allProcessesCompleted === true ? "ready" : "production";
       const proposedStatus = statusByType[event.type] || processStatus;
       const statusRank = { awaiting_payment: 0, awaiting_schedule: 1, production: 2, quality: 3, ready: 4, shipped: 5, completed: 6 };
-      const nextStatus = (statusRank[proposedStatus] || 0) > (statusRank[order.status] || 0) ? proposedStatus : order.status;
+      const nextStatus = (statusRank[proposedStatus] ?? 0) > (statusRank[order.status] ?? 0) ? proposedStatus : order.status;
       const allProcessesCompleted = typeof event.allProcessesCompleted === "boolean"
         ? Number(event.allProcessesCompleted)
         : Number(order.bobo_all_processes_completed || 0);
-      const completedAt = nextStatus === "completed" ? now().toISOString() : "";
-      db.prepare(`UPDATE orders SET status = ?, bobo_work_order_id = COALESCE(NULLIF(?, ''), bobo_work_order_id),
-        bobo_last_sequence = ?, bobo_all_processes_completed = ?, completed_at = CASE WHEN ? != '' THEN ? ELSE completed_at END WHERE id = ?`)
-        .run(nextStatus, String(event.workOrderId || ""), sequence, allProcessesCompleted, completedAt, completedAt, order.id);
-      if (nextStatus !== order.status) {
-        const title = nextStatus === "completed" ? "订单已送达" : nextStatus === "shipped" ? "订单配送中" : nextStatus === "ready" ? "波波工序已全部完成，等待交付" : "波波生产进度已更新";
-        const occurredAt = String(event.occurredAt || now().toISOString());
-        db.prepare("INSERT INTO order_events (order_id, status, title, occurred_at) VALUES (?, ?, ?, ?)")
-          .run(order.id, nextStatus, title, occurredAt);
-        if (order.customer_id) await queueNotification(order.customer_id, "order_status_changed", "order", order.id, { orderNumber: order.order_number, status: nextStatus, title, occurredAt });
+      const occurredAt = String(event.occurredAt || now().toISOString());
+      const completedAt = nextStatus === "completed" && order.status !== "completed"
+        ? String(event.delivery?.deliveredAt || occurredAt)
+        : "";
+      const title = nextStatus === "completed" ? "订单已送达" : nextStatus === "shipped" ? "订单配送中" : nextStatus === "ready" ? "波波工序已全部完成，等待配送" : "波波生产进度已更新";
+      inTransaction(() => {
+        const process = event.process || {};
+        if (process.id && process.name && process.status) {
+          db.prepare(`INSERT INTO public_processes (order_id, process_id, sequence, name, status, started_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(order_id, process_id) DO UPDATE SET sequence = excluded.sequence, name = excluded.name, status = excluded.status, started_at = excluded.started_at, completed_at = excluded.completed_at`)
+            .run(order.id, String(process.id), Number(process.sequence || sequence), String(process.name).slice(0, 60), String(process.status).slice(0, 20), String(process.startedAt || ""), String(process.completedAt || ""));
+        }
+        db.prepare(`UPDATE orders SET status = ?, bobo_work_order_id = COALESCE(NULLIF(?, ''), bobo_work_order_id),
+          bobo_last_sequence = ?, bobo_all_processes_completed = ?, completed_at = CASE WHEN ? != '' THEN ? ELSE completed_at END WHERE id = ?`)
+          .run(nextStatus, String(event.workOrderId || ""), sequence, allProcessesCompleted, completedAt, completedAt, order.id);
+        if (nextStatus !== order.status) {
+          db.prepare("INSERT INTO order_events (order_id, status, title, occurred_at) VALUES (?, ?, ?, ?)")
+            .run(order.id, nextStatus, title, occurredAt);
+        }
+        db.prepare(`INSERT INTO bobo_webhook_events
+          (event_id, order_id, sequence, received_at, event_type, occurred_at, payload_json, applied_status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(String(event.eventId), order.id, sequence, now().toISOString(), String(event.type || ""), occurredAt, rawBody, nextStatus);
+        audit("bobo", "webhook_event", "order", order.id, boboAuditDetail(event));
+      });
+      if (nextStatus !== order.status && order.customer_id) {
+        await queueNotification(order.customer_id, "order_status_changed", "order", order.id, { orderNumber: order.order_number, status: nextStatus, title, occurredAt });
       }
-      db.prepare("INSERT INTO bobo_webhook_events (event_id, order_id, sequence, received_at) VALUES (?, ?, ?, ?)")
-        .run(String(event.eventId), order.id, sequence, now().toISOString());
-      audit("bobo", "webhook_event", "order", order.id, `${event.type}:${event.eventId}`);
       return sendJson(response, 202, { accepted: true });
     }
 
@@ -968,7 +984,7 @@ function createApplication(options = {}) {
         FROM orders JOIN inquiries ON inquiries.id = orders.inquiry_id
         WHERE orders.id = ? AND (orders.customer_id = ? OR orders.phone = ?)`).get(Number(customerMatch[1]), customer.id, customer.phone);
       if (!order) return sendJson(response, 404, { message: "订单不存在" });
-      if (order.status !== "completed") return sendJson(response, 409, { message: "只有已完成订单可以复购" });
+      if (order.status !== "completed") return sendJson(response, 409, { message: "只有已送达订单可以复购" });
       let requirement = {};
       try { requirement = JSON.parse(order.requirement_snapshot || "{}"); } catch {}
       const originalAttachments = frozenOrderAttachments(order).map((item) => ({ id: item.id, name: item.original_name, size: item.size }));
@@ -999,7 +1015,7 @@ function createApplication(options = {}) {
       if (!isBoundCustomer(customer)) return sendJson(response, 401, { message: "请先登录并绑定手机号" });
       const order = db.prepare("SELECT * FROM orders WHERE id = ? AND (customer_id = ? OR phone = ?)").get(Number(customerMatch[1]), customer.id, customer.phone);
       if (!order) return sendJson(response, 404, { message: "订单不存在" });
-      if (order.status !== "completed") return sendJson(response, 409, { message: "只有已完成订单可以复购" });
+      if (order.status !== "completed") return sendJson(response, 409, { message: "只有已送达订单可以复购" });
       const input = await readJson(request);
       const payload = {
         ...input,
@@ -1103,6 +1119,7 @@ function createApplication(options = {}) {
         orderNumber: row.order_number,
         contactName: row.contact_name,
         status: row.status,
+        statusText: ORDER_STATUS_TEXT[row.status] || "状态更新中",
         events
       }), processes });
     }
@@ -1162,6 +1179,7 @@ function createApplication(options = {}) {
         region: row.region,
         address: row.address_snapshot,
         status: row.status,
+        statusText: ORDER_STATUS_TEXT[row.status] || "状态更新中",
         currentProcess: currentProcessLabel(row, processesForOrder(row.id)),
         paymentStatus: paymentSummary(row.id).paymentStatus,
         payment: paymentSummary(row.id),
@@ -1278,7 +1296,7 @@ function createApplication(options = {}) {
       return sendJson(response, 200, {
         id: order.id, orderNumber: order.order_number, inquiryNumber: order.inquiry_number,
         contactName: order.contact_name, phone: order.phone, region: order.region, address: order.address_snapshot,
-        status: order.status, currentProcess, processes, paymentStatus: summary.paymentStatus, boboSyncStatus: order.bobo_sync_status,
+        status: order.status, statusText: ORDER_STATUS_TEXT[order.status] || "状态更新中", currentProcess, processes, paymentStatus: summary.paymentStatus, boboSyncStatus: order.bobo_sync_status,
         boboOrderId: order.bobo_order_id, boboWorkOrderId: order.bobo_work_order_id,
         createdAt: order.created_at, completedAt: order.completed_at, requirement,
         quote: { id: order.quote_id, version: order.quote_version, amount: order.quote_amount, validUntil: order.valid_until, operator: order.quote_operator },

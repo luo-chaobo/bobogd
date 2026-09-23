@@ -101,7 +101,7 @@ function renderOrderResult(container, result) {
   const events = documentRef.createElement("ol");
   card.className = "order-card";
   orderNumber.textContent = result.orderNumber;
-  status.textContent = `当前状态：${result.status}`;
+  status.textContent = `当前状态：${result.statusText || result.status}`;
   events.className = "order-events";
   for (const item of result.events) {
     const event = documentRef.createElement("li");

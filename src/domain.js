@@ -8,6 +8,17 @@ const PUBLIC_STATUS_DICTIONARY = Object.freeze({
   paymentRule: { productionRequiresConfirmedPayment: true }
 });
 
+const ORDER_STATUS_TEXT = Object.freeze({
+  awaiting_payment: "待付款",
+  awaiting_schedule: "待排产",
+  paid: "已付款",
+  production: "生产中",
+  quality: "质检中",
+  ready: "待配送",
+  shipped: "配送中",
+  completed: "已送达"
+});
+
 function normalizePhone(value) {
   const digits = String(value || "").replace(/\D/g, "");
   return digits.startsWith("86") && digits.length === 13 ? digits.slice(2) : digits;
@@ -83,6 +94,7 @@ function publicOrder(order) {
     orderNumber: order.orderNumber,
     contactName: order.contactName,
     status: order.status,
+    statusText: ORDER_STATUS_TEXT[order.status] || "状态更新中",
     events: order.events || []
   };
 }
@@ -92,6 +104,7 @@ module.exports = {
   MAX_ATTACHMENT_SIZE,
   MAX_ATTACHMENT_COUNT,
   MAX_TOTAL_ATTACHMENT_SIZE,
+  ORDER_STATUS_TEXT,
   actualAttachmentSize,
   PUBLIC_STATUS_DICTIONARY,
   canConfirmPayment,

@@ -17,7 +17,7 @@ test("provides the six-part industrial operations navigation", () => {
 });
 
 test("shows all operational dashboard queues and searchable management tables", () => {
-  for (const label of ["待认领询价", "已报价待客户确认", "已建单待收款", "收款待核验", "定金已收待排产", "尾款待收", "波波同步异常", "即将交付订单", "今日完成订单"]) assert.match(script, new RegExp(label));
+  for (const label of ["待认领询价", "已报价待客户确认", "已建单待收款", "收款待核验", "定金已收待排产", "尾款待收", "波波同步异常", "待配送订单", "今日送达订单"]) assert.match(script, new RegExp(label));
   for (const id of ["inquiry-table", "order-table", "payment-table", "customer-table", "todo-table"]) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /name="search"/);
   assert.match(html, /name="from"/);

@@ -28,6 +28,7 @@ test("accepts one signed bobo event and exposes only the public process timeline
   await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${app.server.address().port}`;
   try {
+    assert.equal((await request(baseUrl, "/api/health")).body.version, "0.2.0");
     const created = await request(baseUrl, "/api/inquiries", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ drawingMode: "none", contactName: "王先生", phone: "13812345678", region: "浙江省 宁波市 北仑区", address: "新碶街道 1 号", quantity: 2, expectedDate: "2026-10-01", description: "设备护罩" }) });
     await request(baseUrl, `/api/admin/inquiries/${created.body.id}/quotes`, { method: "POST", headers: { authorization: "Bearer admin-token", "content-type": "application/json" }, body: JSON.stringify({ amount: 2000, validUntil: "2026-10-01", confirmed: true, specification: { requirement: "控制柜外壳", material: "SECC", thickness: "1.5 mm", dimensions: "600×400×300 mm", process: "激光、折弯、喷塑", quantity: 2, expectedDate: "2026-10-01", technicalRequirements: "无毛刺", remark: "" } }) });
     const paid = await request(baseUrl, `/api/admin/inquiries/${created.body.id}/payment-confirmation`, { method: "POST", headers: { authorization: "Bearer admin-token", "content-type": "application/json" }, body: "{}" });
@@ -76,6 +77,7 @@ test("accepts one signed bobo event and exposes only the public process timeline
     assert.equal((await request(baseUrl, "/api/integrations/bobo/events", { method: "POST", headers: completedHeaders, body: completedBody })).status, 202);
     const adminOrders = await request(baseUrl, "/api/admin/orders", { headers: { authorization: "Bearer admin-token" } });
     assert.equal(adminOrders.body[0].status, "ready");
+    assert.equal(adminOrders.body[0].statusText, "待配送");
     assert.equal(adminOrders.body[0].currentProcess, "工序已全部完成");
     const adminOrder = await request(baseUrl, `/api/admin/orders/${paid.body.id}`, { headers: { authorization: "Bearer admin-token" } });
     assert.equal(adminOrder.body.currentProcess, "工序已全部完成");
@@ -98,6 +100,42 @@ test("accepts one signed bobo event and exposes only the public process timeline
     assert.equal((await request(baseUrl, "/api/integrations/bobo/events", { method: "POST", headers: deliveryHeaders, body: deliveryBody })).status, 202);
     const deliveredOrder = await request(baseUrl, `/api/admin/orders/${paid.body.id}`, { headers: { authorization: "Bearer admin-token" } });
     assert.equal(deliveredOrder.body.status, "completed");
+    assert.equal(deliveredOrder.body.statusText, "已送达");
+    assert.equal(deliveredOrder.body.completedAt, "2026-09-05T15:00:00.000Z");
+    assert.equal(deliveredOrder.body.events.at(-1).title, "订单已送达");
+    const webhookRows = db.prepare("SELECT event_id, event_type, applied_status, payload_json FROM bobo_webhook_events ORDER BY sequence").all();
+    assert.deepEqual(webhookRows.map((item) => [item.event_id, item.event_type, item.applied_status]), [
+      ["evt-1", "process.updated", "production"],
+      ["evt-2", "process.updated", "production"],
+      ["evt-3", "process.updated", "ready"],
+      ["evt-4", "shipment.shipped", "shipped"],
+      ["evt-5", "delivery.completed", "completed"]
+    ]);
+    assert.equal(JSON.parse(webhookRows[0].payload_json).process.name, "激光");
+    const auditRows = db.prepare("SELECT detail FROM audit_logs WHERE action = 'webhook_event' ORDER BY id").all();
+    assert.deepEqual(JSON.parse(auditRows[0].detail), {
+      kind: "bobo_webhook",
+      eventType: "process.updated",
+      eventId: "evt-1",
+      process: { name: "激光", status: "已完成" }
+    });
+    assert.deepEqual(JSON.parse(auditRows.at(-1).detail), {
+      kind: "bobo_webhook",
+      eventType: "delivery.completed",
+      eventId: "evt-5",
+      deliveredAt: "2026-09-05T15:00:00.000Z"
+    });
+
+    db.exec(`CREATE TRIGGER reject_bobo_event BEFORE INSERT ON bobo_webhook_events
+      WHEN NEW.event_id = 'evt-rollback' BEGIN SELECT RAISE(ABORT, 'forced rollback'); END`);
+    const rollbackEvent = { eventId: "evt-rollback", sequence: 6, workOrderId: "work-1", externalOrderNumber: paid.body.orderNumber, type: "process.updated", occurredAt: "2026-09-05T16:00:00.000Z", allProcessesCompleted: true, process: { id: "route-rollback", sequence: 4, name: "包装", status: "已完成", startedAt: "", completedAt: "2026-09-05T16:00:00.000Z" } };
+    const rollbackBody = JSON.stringify(rollbackEvent);
+    const rollbackNonce = "nonce-rollback";
+    const rollbackHeaders = { "content-type": "application/json", "x-integration-timestamp": timestamp, "x-integration-nonce": rollbackNonce, "x-integration-signature": sign(secret, timestamp, rollbackNonce, rollbackBody) };
+    assert.equal((await request(baseUrl, "/api/integrations/bobo/events", { method: "POST", headers: rollbackHeaders, body: rollbackBody })).status, 500);
+    assert.equal(db.prepare("SELECT bobo_last_sequence FROM orders WHERE id = ?").get(order.id).bobo_last_sequence, 5);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM public_processes WHERE process_id = 'route-rollback'").get().count, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'webhook_event'").get().count, 5);
 
   } finally {
     await new Promise((resolve) => app.server.close(resolve));

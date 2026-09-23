@@ -163,7 +163,7 @@ test("displays customer-facing mini-program statuses in Chinese", () => {
   }, {
     draft: "草稿", submitted: "待受理", new: "待受理", claimed: "已受理", ordered: "已转订单",
     paid: "已付款", production: "生产中", inProgress: "生产中", quality: "质检中",
-    ready: "待交付", shipped: "已发货", completed: "已完成", pending: "待开始", unknown: "状态更新中"
+    ready: "待配送", shipped: "配送中", completed: "已送达", pending: "待开始", unknown: "状态更新中"
   });
   assert.equal(withStatusText({ status: "new", state: "draft" }).statusText, "草稿");
 
@@ -173,6 +173,16 @@ test("displays customer-facing mini-program statuses in Chinese", () => {
     assert.match(markup, /statusText/);
     assert.match(logic, page === "order-detail" ? /buildOrderDetailViewModel/ : /withStatusText/);
   }
+});
+
+test("refreshes the customer order detail while the page is visible", () => {
+  const logic = fs.readFileSync(path.join(__dirname, "../miniprogram/pages/order-detail/index.ts"), "utf8");
+  assert.match(logic, /onShow\(\)/);
+  assert.match(logic, /onHide\(\)/);
+  assert.match(logic, /onUnload\(\)/);
+  assert.match(logic, /onPullDownRefresh/);
+  assert.match(logic, /setInterval/);
+  assert.match(logic, /clearInterval/);
 });
 
 test("formats order progress times and Chinese process statuses for customers", () => {
