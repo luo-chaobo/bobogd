@@ -46,6 +46,23 @@ page { background: #f3f6f8; color: #1e2d3b; font-size: 28rpx; }
 .attachment-remove { width: 44rpx; height: 44rpx; margin: 0; padding: 0; border: 1rpx solid #c24e46; border-radius: 50%; background: #fff; color: #c24e46; font-size: 32rpx; line-height: 40rpx; }
 .attachment-remove::after { border: 0; }
 .order-section { padding: 30rpx; }
+.order-detail-page > .hero { position: relative; min-height: 242rpx; padding-right: 232rpx; box-sizing: border-box; }
+.order-hero-copy { display: flex; flex-direction: column; justify-content: center; min-height: 154rpx; }
+.order-number-title { margin: 12rpx 0; }
+.order-number-line { margin: 0; line-height: 1.2; }
+.delivery-date { position: absolute; top: 50%; right: 28rpx; display: flex; align-items: center; justify-content: center; min-width: 174rpx; min-height: 86rpx; padding: 0 18rpx; border: 1rpx solid rgba(255, 255, 255, .22); border-radius: 16rpx; box-sizing: border-box; background: rgba(255, 255, 255, .12); font-size: 25rpx; font-weight: 700; text-align: center; transform: translateY(-50%); }
+.delivery-date-normal { color: #8fe0d8; border-color: rgba(89, 211, 200, .46); background: rgba(11, 139, 134, .18); }
+.delivery-date-attention { color: #ffd27a; border-color: rgba(255, 190, 73, .5); background: rgba(174, 111, 0, .22); }
+.delivery-date-urgent { color: #ffad73; border-color: rgba(255, 126, 47, .55); background: rgba(190, 77, 13, .24); }
+.delivery-date-critical { color: #ff8e88; border-color: rgba(255, 92, 84, .62); background: rgba(188, 48, 42, .26); }
+.delivery-date-completed { color: #92e0aa; border-color: rgba(86, 196, 119, .5); background: rgba(38, 139, 70, .22); }
+.delivery-date-unknown { color: #d7e0e5; border-color: rgba(215, 224, 229, .35); background: rgba(255, 255, 255, .08); font-size: 22rpx; }
+.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16rpx; }
+.section-heading .section-title { margin-bottom: 20rpx; }
+.refresh-control { display: flex; align-items: center; gap: 12rpx; }
+.refresh-time { color: #84919b; font-size: 20rpx; white-space: nowrap; }
+.refresh-button { min-width: 96rpx; height: 56rpx; margin: 0; padding: 0 18rpx; border: 1rpx solid #0b8b86; border-radius: 999rpx; background: #fff; color: #08746f; font-size: 22rpx; line-height: 54rpx; }
+.refresh-button::after { border: 0; }
 .process-list { display: flex; flex-direction: column; }
 .process-step { display: flex; gap: 20rpx; padding: 22rpx 0; border-bottom: 1rpx solid #eef2f4; }
 .process-step:last-child { border-bottom: 0; }
@@ -97,3 +114,4 @@ page { background: #f3f6f8; color: #1e2d3b; font-size: 28rpx; }
 .support-entry-title { color: #fff; font-size: 30rpx; font-weight: 700; }
 .support-entry-description { margin-top: 6rpx; color: rgba(255, 255, 255, .84); font-size: 22rpx; }
 .support-entry-arrow { position: absolute; top: 50%; right: 24rpx; color: #fff; font-size: 44rpx; font-weight: 300; transform: translateY(-50%); }
+.order-detail-page { min-height: 100vh; box-sizing: border-box; background: #f3f6f8; }

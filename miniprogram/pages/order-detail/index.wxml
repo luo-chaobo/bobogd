@@ -1,8 +1,7 @@
 <view class="page order-detail-page">
   <view class="hero">
-    <text class="eyebrow">ORDER TRACKING</text>
-    <text class="title">{{order.orderNumber || '订单详情'}}</text>
-    <text class="subtitle">{{order.statusText || '正在查询公开节点'}}</text>
+    <view class="order-hero-copy"><text class="eyebrow">ORDER TRACKING</text><view class="order-number-title"><text class="title order-number-line">{{order.orderNumberPrefix || '订单详情'}}</text><text wx:if="{{order.orderNumberSuffix}}" class="title order-number-line">{{order.orderNumberSuffix}}</text></view><text class="subtitle">{{order.statusText || '正在查询公开节点'}}</text></view>
+    <view class="delivery-date delivery-date-{{order.deliveryDateTone}}"><text>{{order.deliveryDateText || '交期待确认'}}</text></view>
   </view>
 
   <view class="card order-section">
@@ -20,7 +19,7 @@
   </view>
 
   <view class="card order-section">
-    <text class="section-title">公开进度</text>
+    <view class="section-heading"><text class="section-title">公开进度</text><view class="refresh-control"><text class="refresh-time">更新于 {{lastUpdated || '--:--:--'}}</text><button class="refresh-button" loading="{{refreshing}}" bindtap="refreshNow">刷新</button></view></view>
     <view class="progress-timeline" wx:if="{{order.events.length}}">
       <view wx:for="{{order.events}}" wx:key="occurredAt" class="timeline-item">
         <view class="timeline-rail"><view class="timeline-dot"></view><view class="timeline-line" wx:if="{{index < order.events.length - 1}}"></view></view>

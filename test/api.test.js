@@ -370,7 +370,7 @@ test("links a same-phone customer in admin and exposes their order list and deta
     await jsonRequest(`${baseUrl}/api/admin/inquiries/${created.body.id}/quotes`, {
       method: "POST",
       headers: adminHeaders,
-      body: JSON.stringify({ amount: 2800, validUntil: "2026-09-05", confirmed: true })
+      body: JSON.stringify({ amount: 2800, validUntil: "2026-09-05", confirmed: true, specification: { expectedDate: "" } })
     });
     await jsonRequest(`${baseUrl}/api/admin/inquiries/${created.body.id}/payment-confirmation`, { method: "POST", headers: adminHeaders, body: "{}" });
     const orders = await jsonRequest(`${baseUrl}/api/customer/orders`, { headers: customerHeadersValue });
@@ -380,6 +380,7 @@ test("links a same-phone customer in admin and exposes their order list and deta
     const detail = await jsonRequest(`${baseUrl}/api/customer/orders/${orders.body.items[0].id}`, { headers: customerHeadersValue });
     assert.equal(detail.response.status, 200);
     assert.equal(detail.body.orderNumber.startsWith("WL-"), true);
+    assert.equal(detail.body.expectedDate, inquiryPayload().expectedDate);
   });
 });
 

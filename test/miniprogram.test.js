@@ -181,8 +181,35 @@ test("refreshes the customer order detail while the page is visible", () => {
   assert.match(logic, /onHide\(\)/);
   assert.match(logic, /onUnload\(\)/);
   assert.match(logic, /onPullDownRefresh/);
-  assert.match(logic, /setInterval/);
-  assert.match(logic, /clearInterval/);
+  assert.match(logic, /setTimeout/);
+  assert.match(logic, /clearTimeout/);
+  assert.match(logic, /10000/);
+  assert.match(logic, /refreshNow/);
+  assert.match(logic, /lastUpdated/);
+});
+
+test("adds a cache-busting key when refreshing an order", async () => {
+  const calls = [];
+  const api = createApiClient({ baseUrl: "https://api.example.com", request: async (options) => { calls.push(options); return {}; } });
+  await api.getOrder(7, "token", 123456);
+  assert.equal(calls[0].url, "https://api.example.com/api/customer/orders/7?refresh=123456");
+});
+
+test("colors delivery dates by calendar-day urgency without adding status copy", () => {
+  const { buildDeliveryDateView } = require("../miniprogram/services/status.ts");
+  const now = new Date("2026-10-10T12:00:00+08:00");
+  const cases = [
+    ["2026-10-20", "production", "normal"],
+    ["2026-10-16", "production", "attention"],
+    ["2026-10-12", "production", "urgent"],
+    ["2026-10-10", "production", "critical"],
+    ["2026-10-09", "production", "critical"],
+    ["2026-10-09", "completed", "completed"]
+  ];
+  for (const [expectedDate, status, tone] of cases) {
+    assert.deepEqual(buildDeliveryDateView(expectedDate, status, now), { deliveryDateText: expectedDate, deliveryDateTone: tone });
+  }
+  assert.deepEqual(buildDeliveryDateView("", "production", now), { deliveryDateText: "交期待确认", deliveryDateTone: "unknown" });
 });
 
 test("formats order progress times and Chinese process statuses for customers", () => {
@@ -194,14 +221,18 @@ test("formats order progress times and Chinese process statuses for customers", 
   assert.equal(statusText("已完成"), "已完成");
 
   const order = buildOrderDetailViewModel({
-    orderNumber: "WL-1",
+    orderNumber: "WL-20260923-0002",
     status: "production",
+    expectedDate: "2026-10-12",
     processes: [{ id: "laser", sequence: 1, name: "激光", status: "已完成", startedAt: "2026-09-16T12:00:00.000Z", completedAt: "2026-09-16T13:58:50.085Z" }],
     events: [{ status: "paid", title: "已核验到账 ¥878.00", occurredAt: "2026-09-16T13:59:36.654Z" }]
   });
   assert.equal(order.processes[0].statusText, "已完成");
   assert.equal(order.processes[0].displayTime, "完成于 2026-09-16 21:58");
   assert.equal(order.events[0].displayTime, "2026-09-16 21:59");
+  assert.equal(order.deliveryDateText, "2026-10-12");
+  assert.equal(order.orderNumberPrefix, "WL-20260923");
+  assert.equal(order.orderNumberSuffix, "-0002");
 });
 
 test("renders production processes and public events as readable timelines", () => {

@@ -28,7 +28,7 @@ test("accepts one signed bobo event and exposes only the public process timeline
   await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${app.server.address().port}`;
   try {
-    assert.equal((await request(baseUrl, "/api/health")).body.version, "0.2.0");
+    assert.equal((await request(baseUrl, "/api/health")).body.version, "0.2.1");
     const created = await request(baseUrl, "/api/inquiries", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ drawingMode: "none", contactName: "王先生", phone: "13812345678", region: "浙江省 宁波市 北仑区", address: "新碶街道 1 号", quantity: 2, expectedDate: "2026-10-01", description: "设备护罩" }) });
     await request(baseUrl, `/api/admin/inquiries/${created.body.id}/quotes`, { method: "POST", headers: { authorization: "Bearer admin-token", "content-type": "application/json" }, body: JSON.stringify({ amount: 2000, validUntil: "2026-10-01", confirmed: true, specification: { requirement: "控制柜外壳", material: "SECC", thickness: "1.5 mm", dimensions: "600×400×300 mm", process: "激光、折弯、喷塑", quantity: 2, expectedDate: "2026-10-01", technicalRequirements: "无毛刺", remark: "" } }) });
     const paid = await request(baseUrl, `/api/admin/inquiries/${created.body.id}/payment-confirmation`, { method: "POST", headers: { authorization: "Bearer admin-token", "content-type": "application/json" }, body: "{}" });

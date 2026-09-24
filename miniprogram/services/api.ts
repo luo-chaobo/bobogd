@@ -65,7 +65,7 @@ export function createApiClient(options: ApiClientOptions) {
     supplementInquiry: (id: number, data: unknown, token: string) => call(`/api/customer/inquiries/${id}/supplements`, "POST", data, token),
     getRequirements: (token: string) => call("/api/customer/inquiries", "GET", undefined, token),
     getOrders: (query: OrderQuery, token: string) => call(`/api/customer/orders?${orderQueryString(query)}`, "GET", undefined, token),
-    getOrder: (id: number, token: string) => call(`/api/customer/orders/${id}`, "GET", undefined, token),
+    getOrder: (id: number, token: string, refresh = Date.now()) => call(`/api/customer/orders/${id}?refresh=${refresh}`, "GET", undefined, token),
     getRepurchaseDraft: (id: number, token: string) => call(`/api/customer/orders/${id}/repurchase-draft`, "GET", undefined, token),
     repurchaseOrder: (id: number, data: unknown, token: string) => call(`/api/customer/orders/${id}/repurchase`, "POST", data, token),
     saveSubscriptions: (types: string[], token: string) => call("/api/customer/subscriptions", "POST", { types }, token)

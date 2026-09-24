@@ -42,6 +42,27 @@ export function formatPublicDateTime(value: unknown) {
   return `${chinaTime.getUTCFullYear()}-${pad(chinaTime.getUTCMonth() + 1)}-${pad(chinaTime.getUTCDate())} ${pad(chinaTime.getUTCHours())}:${pad(chinaTime.getUTCMinutes())}`;
 }
 
+export function buildDeliveryDateView(expectedDate: unknown, status: unknown, now = new Date()) {
+  const deliveryDateText = String(expectedDate || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDateText)) return { deliveryDateText: "交期待确认", deliveryDateTone: "unknown" };
+  if (String(status || "").toLowerCase() === "completed") return { deliveryDateText, deliveryDateTone: "completed" };
+  const [year, month, day] = deliveryDateText.split("-").map(Number);
+  const deadline = new Date(year, month - 1, day).getTime();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const remainingDays = Math.round((deadline - today) / 86400000);
+  const deliveryDateTone = remainingDays <= 0 ? "critical" : remainingDays <= 3 ? "urgent" : remainingDays <= 7 ? "attention" : "normal";
+  return { deliveryDateText, deliveryDateTone };
+}
+
+export function splitOrderNumber(value: unknown) {
+  const orderNumber = String(value || "").trim();
+  const match = orderNumber.match(/^(.*)(-\d+)$/);
+  return {
+    orderNumberPrefix: match ? match[1] : orderNumber,
+    orderNumberSuffix: match ? match[2] : ""
+  };
+}
+
 export function buildOrderDetailViewModel(order: any) {
   const processes = (order.processes || []).map((process: any, index: number) => {
     const status = String(process.status || "").trim();
@@ -55,5 +76,5 @@ export function buildOrderDetailViewModel(order: any) {
     };
   });
   const events = (order.events || []).map((event: any) => ({ ...withStatusText(event), displayTime: formatPublicDateTime(event.occurredAt) }));
-  return { ...withStatusText(order), processes, events };
+  return { ...withStatusText(order), ...splitOrderNumber(order.orderNumber), ...buildDeliveryDateView(order.expectedDate, order.status), processes, events };
 }

@@ -322,7 +322,7 @@ function createApplication(options = {}) {
       dimensions: text("dimensions", inquiry.dimensions, 200),
       process: text("process", inquiry.process, 300),
       quantity: Math.max(1, Math.trunc(Number(source.quantity) || Number(inquiry.quantity) || 1)),
-      expectedDate: text("expectedDate", inquiry.expected_date, 40),
+      expectedDate: text("expectedDate", "", 40) || String(inquiry.expected_date || "").trim().slice(0, 40),
       technicalRequirements: text("technicalRequirements", inquiry.technical_requirements),
       remark: text("remark", "")
     };
@@ -1076,7 +1076,14 @@ function createApplication(options = {}) {
       if (!order) return sendJson(response, 404, { message: "订单不存在" });
       const events = db.prepare("SELECT status, title, occurred_at AS occurredAt FROM order_events WHERE order_id = ? ORDER BY id").all(order.id);
       const processes = db.prepare("SELECT process_id AS id, sequence, name, status, started_at AS startedAt, completed_at AS completedAt FROM public_processes WHERE order_id = ? ORDER BY sequence, process_id").all(order.id);
-      return sendJson(response, 200, { ...publicOrder({ orderNumber: order.order_number, contactName: order.contact_name, status: order.status, events }), processes });
+      let requirement = {};
+      try { requirement = JSON.parse(order.requirement_snapshot || "{}"); } catch {}
+      const inquiry = db.prepare("SELECT expected_date AS expectedDate FROM inquiries WHERE id = ?").get(order.inquiry_id);
+      return sendJson(response, 200, {
+        ...publicOrder({ orderNumber: order.order_number, contactName: order.contact_name, status: order.status, events }),
+        expectedDate: String(requirement.expectedDate || inquiry?.expectedDate || ""),
+        processes
+      });
     }
 
     if (request.method === "POST" && url.pathname === "/api/inquiries") {
