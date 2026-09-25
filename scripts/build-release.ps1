@@ -138,7 +138,7 @@ try {
   if (Test-Path -LiteralPath $tempRoot) {
     $resolvedTempRoot = (Resolve-Path -LiteralPath $tempRoot).Path
     $resolvedTempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-    $tempPrefix = $resolvedTempBase.TrimEnd([char[]]@('\\', '/')) + [IO.Path]::DirectorySeparatorChar
+    $tempPrefix = $resolvedTempBase.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
     if (-not $resolvedTempRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase)) {
       throw "拒绝清理临时目录之外的路径：$resolvedTempRoot"
     }
