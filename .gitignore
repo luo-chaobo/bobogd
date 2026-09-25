@@ -12,6 +12,7 @@ output/
 outputs/
 apk-output/
 deploy/
+release-output/
 .restore-backups/
 
 *.log
