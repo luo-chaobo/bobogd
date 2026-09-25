@@ -244,9 +244,9 @@ function filterWorkOrdersBySource(workOrders, source, sourceChannel) {
 }
 
 function dashboardSourceTabs() {
-  return `<div class="source-tabs">${[["all", "全部订单"], ["factory", "工厂单"], ["platform", "平台单"]]
+  return `<div class="source-filter"><span>看板订单范围</span><div class="source-tabs">${[["all", "全部订单"], ["factory", "工厂单"], ["platform", "平台单"]]
     .map(([value, label]) => `<button type="button" class="btn secondary compact ${state.dashboardSource === value ? "active" : ""}" data-dashboard-source="${value}">${label}</button>`)
-    .join("")}</div>`;
+    .join("")}</div></div>`;
 }
 
 function completionSourceSummaryRows(summary = {}) {
@@ -1239,7 +1239,8 @@ function adminShell() {
     mobile: mobileShell(true),
   }[state.view];
   const pendingPlatformCount = data.workOrders.filter((workOrder) => workOrder.creationStatus === "pending" && orderSource(workOrder).origin === "platform").length;
-  const ordersNav = pureDriver ? "" : `<div class="nav-group"><span>订单工单</span><button class="${state.view === "ordersAll" ? "active" : ""}" data-view="ordersAll">全部订单</button><button class="${state.view === "ordersFactory" ? "active" : ""}" data-view="ordersFactory">工厂单</button><button class="${state.view === "ordersPlatform" ? "active" : ""}" data-view="ordersPlatform">平台单${pendingPlatformCount ? ` <b class="nav-count">${pendingPlatformCount}</b>` : ""}</button></div>`;
+  const pendingPlatformBadge = pendingPlatformCount ? `<b class="nav-count">${pendingPlatformCount}</b>` : "";
+  const ordersNav = pureDriver ? "" : `<div class="nav-group"><div class="nav-group-title"><span>订单工单</span>${pendingPlatformBadge}</div><div class="nav-group-items"><button type="button" class="${state.view === "ordersAll" ? "active" : ""}" data-view="ordersAll">全部订单</button><button type="button" class="${state.view === "ordersFactory" ? "active" : ""}" data-view="ordersFactory">工厂单</button><button type="button" class="${state.view === "ordersPlatform" ? "active" : ""}" data-view="ordersPlatform">平台单${pendingPlatformBadge}</button></div></div>`;
   return `
     <div class="app-shell">
       <aside class="side">
