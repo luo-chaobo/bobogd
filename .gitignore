@@ -5,11 +5,19 @@ docs/data/*
 !docs/data/analytics-access.md
 private/
 backups/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
 
 # Local configuration and secrets
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Dependencies and generated output
 node_modules/
@@ -20,10 +28,12 @@ coverage/
 dist/
 release/
 miniprogram/.workbuddy/
+miniprogram/project.private.config.json
 
 # Logs and temporary files
 *.log
 *.tmp
+*.bak
 
 # Editors and operating systems
 .vscode/

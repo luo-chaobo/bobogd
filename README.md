@@ -14,26 +14,34 @@
 ## 产品与协作文档
 
 - [仓库交接](Handoff.md)：本仓库范围、已验证版本、阻塞与下一步。
+- [协作规范](CONTRIBUTING.md)：环境准备、分支、提交、测试和敏感信息规则。
 - [系统目录](docs/product/system-catalog.md)：各产品与基础设施的职责、依赖和状态。
 - [架构索引](docs/architecture/README.md)：仓库内架构资料的入口。
 - [数据分析访问契约](docs/data/analytics-access.md)：一期脱敏导出和二期数据访问边界。
 - [API 文档](docs/bobo-api.md)：与波波工单的服务端 HTTPS 接口边界。
 - [部署文档](docs/order-subdomain.md)：`order.wljixie.com` 的上线映射约束。
-- [Obsidian 产品主档](D:\Obsidian\未来机械\未来机械)：跨系统产品、路线图和协作记录；Git 是本仓库技术事实主档。
+- Obsidian 产品主档保存跨系统产品、路线图和协作记录；Git 是本仓库技术事实主档。
 
 ## 本地启动
 
-需要 Node.js 24 或更新版本，不需要安装第三方包。
+需要 Node.js 24，不需要安装第三方包。首次拉取后执行：
 
 ```powershell
-$env:ADMIN_TOKEN = "仅供本地紧急兼容的令牌"
-$env:ENABLE_LEGACY_ADMIN_TOKEN = "1"
-$env:ENABLE_WECHAT_MOCK = "1"
-$env:ENABLE_PHONE_MOCK = "1"
-& "C:\Users\luoch\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" .\src\server.js
+Copy-Item .env.example .env
+node --env-file-if-exists=.env .\src\server.js
 ```
 
 打开 `http://127.0.0.1:8080/`；交易平台为 `http://127.0.0.1:8080/platform.html`；客服后台为 `http://127.0.0.1:8080/admin.html`。本地旧令牌只用于兼容 API 测试，正式公网必须设置 `ENABLE_LEGACY_ADMIN_TOKEN=0` 并配置企业微信参数。两个 mock 开关只能用于本地验收，公网环境不得启用。
+
+如需在本机验收微信登录和手机号授权 mock，可临时在 PowerShell 中执行：
+
+```powershell
+$env:ENABLE_WECHAT_MOCK = "1"
+$env:ENABLE_PHONE_MOCK = "1"
+node --env-file-if-exists=.env .\src\server.js
+```
+
+不要把真实密钥写入 `.env.example` 或提交 `.env`。生产凭据只放在服务器环境变量或专用密钥管理服务中。
 
 正式上线时建议由 `order.wljixie.com` 独立展示交易平台，官网仍使用 `wljixie.com`。反向代理、证书和接口同源配置见 `docs/order-subdomain.md`，本地阶段不执行 DNS 或云端部署。
 
@@ -44,8 +52,10 @@ $env:ENABLE_PHONE_MOCK = "1"
 ## 测试
 
 ```powershell
-& "C:\Users\luoch\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" --experimental-strip-types --test .\test\*.test.js
+node --experimental-strip-types --test --test-force-exit .\test\*.test.js
 ```
+
+安装了 npm 时也可以执行 `npm test`。GitHub Actions 会在每次推送和拉取请求时运行相同测试。
 
 ## 上线前必须补齐
 
