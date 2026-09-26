@@ -1,5 +1,13 @@
 # Website Repository Handoff
-2026-09-14（Asia/Shanghai）
+2026-09-26（Asia/Shanghai）
+
+## 2026-09-26 正式上线准备
+
+- 当前仓库现场核验为 `main` @ `f9d487d`，并存在 24 个已修改文件及新增素材/页面；这些用户改动尚未整理成正式发布提交。
+- `test.wljixie.com/api/health` 公网返回服务版本 `0.2.1`；该响应尚不能映射到准确 Git 提交。
+- 目标生产入口为 `order.wljixie.com`，客服后台为 `admin.wljixie.com`；根域和 `www` 暂时保留第三方旧官网。
+- BOBO 正式接口目标为 `https://bobogd.wljixie.com/api/external/work-orders`，回调目标为 `https://order.wljixie.com/api/integrations/bobo/events`。测试与生产必须使用不同数据库和共享密钥。
+- 本轮只完成方案、BOBO 本地版本固化和文档同步；网站发布版本、ECS生产目录、DNS、SSL、OSS、企业微信和小程序正式配置仍未实施。
 
 ## 2026-09-14 测试域名接入本地波波（现场已验证）
 
