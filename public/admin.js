@@ -1,5 +1,5 @@
-const state = { session: null, view: "dashboard", pendingWrites: 0, detail: null, detailItem: null, payments: new Map(), action: null, refreshingDetail: false, previewUrl: "", dxfPreview: null, refreshController: null };
-const { createRefreshController, syncOrderRow, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition } = window.AdminTools;
+const state = { session: null, view: "dashboard", context: null, pendingWrites: 0, detail: null, detailItem: null, payments: new Map(), action: null, refreshingDetail: false, previewUrl: "", dxfPreview: null, refreshController: null, orderScopeController: null, drawerTrigger: null };
+const { PROCESS_ORDER, createRefreshController, createOrderScopeController, createLoadingDelay, syncOrderRow, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, serializeProcesses, parseAdminHash, buildAdminHash, priorityTaskTarget, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition } = window.AdminTools;
 const labels = {
   new: "待认领", claimed: "跟进中", quoted: "已报价", ordered: "已转订单", closed: "已关闭", draft: "草稿", confirmed: "已确认", change_requested: "变更待处理",
   awaiting_payment: "待付款", awaiting_schedule: "待排产", production: "生产中", quality: "质检中",
@@ -11,17 +11,25 @@ const labels = {
 const boboLabels = { not_ready: "未到同步条件", awaiting_confirmation: "待确认同步", pending: "待同步", retrying: "同步异常", failed: "同步失败", synced: "已同步" };
 const headings = {
   dashboard: ["OPERATIONS OVERVIEW", "工作台"], inquiries: ["RFQ MANAGEMENT", "询价管理"],
-  orders: ["ORDER FULFILLMENT", "订单管理"], payments: ["PAYMENT CONTROL", "收款管理"],
+  orders: ["ORDER FULFILLMENT", "订单管理"], history: ["ORDER ARCHIVE", "历史订单"], payments: ["PAYMENT CONTROL", "收款管理"],
   customers: ["CUSTOMER RECORDS", "客户档案"], todos: ["EXCEPTION QUEUE", "异常待办"]
+};
+const contextLabels = {
+  "inquiries:unclaimed": "待认领询价", "inquiries:awaiting_customer": "已报价待客户确认",
+  "orders:awaiting_payment": "已建单待收款", "orders:schedule_ready": "定金已收待排产",
+  "orders:balance_due": "尾款待收", "orders:ready_delivery": "待配送订单",
+  "payments:pending": "收款待核验", "todos:bobo_sync": "波波同步异常", "history:today": "今日送达订单"
 };
 
 function byId(id) { return document.getElementById(id); }
 function element(tag, text = "", className = "") { const item = document.createElement(tag); item.textContent = String(text ?? ""); item.className = className; return item; }
 function money(value) { return `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function dateTime(value) { return value ? new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)) : "—"; }
+function todayDate() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function badge(value, text = "") { return element("span", text || labels[value] || value || "—", `admin-badge status-${value || "unknown"}`); }
 function boboBadge(value) { return element("span", boboLabels[value] || value || "—", `admin-badge status-${value || "unknown"}`); }
 function cell(...children) { const item = document.createElement("td"); item.append(...children); return item; }
+function labeledCell(label, ...children) { const item = cell(...children); item.dataset.label = label; return item; }
 function stacked(primary, secondary = "") { const item = element("div", "", "admin-cell"); item.append(element("strong", primary), element("small", secondary)); return item; }
 function actionButton(text, action, id, primary = false) { const item = element("button", text, `button button-small${primary ? "" : " button-ghost"}`); item.type = "button"; item.dataset.action = action; item.dataset.id = String(id); return item; }
 function showNotice(message, error = false) { const item = byId("admin-notice"); item.textContent = message; item.classList.toggle("error", error); }
@@ -42,7 +50,10 @@ async function api(url, options = {}) {
     if (!response.ok) throw new Error(body?.message || "操作失败");
     return body;
   } finally {
-    if (isWrite) state.pendingWrites -= 1;
+    if (isWrite) {
+      state.pendingWrites -= 1;
+      if (state.pendingWrites === 0) state.refreshController?.resume();
+    }
   }
 }
 
@@ -52,48 +63,122 @@ function query(form) {
   return params.toString();
 }
 
+function viewForm(view) {
+  const ids = { inquiries: "inquiry-filter", orders: "order-filter", history: "history-filter", payments: "payment-filter", todos: "todo-filter" };
+  return ids[view] ? byId(ids[view]) : null;
+}
+
+function formParams(view) {
+  const form = viewForm(view);
+  return form ? Object.fromEntries([...new FormData(form)].filter(([, value]) => String(value).trim())) : {};
+}
+
+function applyViewParams(view, params = {}) {
+  const form = viewForm(view);
+  if (!form) return;
+  for (const control of form.elements) {
+    if (!control.name) continue;
+    control.value = "";
+  }
+  if (form.elements.view) form.elements.view.value = view === "history" ? "completed" : "active";
+  for (const [name, value] of Object.entries(params)) if (form.elements[name]) form.elements[name].value = value;
+  if (view === "orders") updateOrderScope();
+}
+
+function updateOrderScope() {
+  const current = byId("order-filter").elements.queue.value || "all";
+  document.querySelectorAll("[data-order-scope]").forEach((button) => {
+    const active = button.dataset.orderScope === current;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function setOrderScopeBusy(busy) {
+  document.querySelectorAll("[data-order-scope]").forEach((control) => {
+    control.classList.toggle("is-busy", busy);
+    control.setAttribute("aria-busy", String(busy));
+  });
+}
+
+function contextLabel(view, params) {
+  if (view === "history" && params.from && params.from === params.to) return contextLabels["history:today"];
+  return contextLabels[`${view}:${params.queue || params.status || params.type || ""}`] || (Object.keys(params).some((key) => !["view"].includes(key)) ? "筛选结果" : "");
+}
+
+function updateContext(count) {
+  const bar = byId("admin-context");
+  const params = formParams(state.view);
+  const label = contextLabel(state.view, params);
+  bar.hidden = !label;
+  if (label) {
+    bar.querySelector("span").textContent = `当前任务：${label} · ${count}笔`;
+  }
+}
+
 function renderRows(body, rows, emptyText) {
   if (rows.length) return body.replaceChildren(...rows);
   const row = document.createElement("tr");
-  const empty = cell(element("span", emptyText, "admin-empty"));
-  empty.colSpan = 12;
+  const wrap = element("div", "", "admin-empty");
+  wrap.append(element("span", emptyText));
+  const empty = cell(wrap);
+  const columnCount = body.closest("table")?.tHead?.rows[0]?.cells.length || 1;
+  empty.colSpan = columnCount;
   row.append(empty);
   body.replaceChildren(row);
 }
 
+async function tableApi(url, tableId) {
+  const body = byId(tableId).tBodies[0];
+  const columnCount = byId(tableId).tHead.rows[0].cells.length;
+  const previous = [...body.childNodes];
+  let shown = false;
+  const loading = createLoadingDelay({ show: () => {
+    shown = true;
+    const rows = Array.from({ length: 3 }, () => { const row = document.createElement("tr"); const item = cell(element("span", "正在加载…", "admin-skeleton")); item.colSpan = columnCount; row.append(item); return row; });
+    body.replaceChildren(...rows);
+  } });
+  loading.start();
+  try { return await api(url); }
+  catch (error) { if (shown) body.replaceChildren(...previous); throw error; }
+  finally { loading.stop(); }
+}
+
 async function loadDashboard() {
-  const [metrics, inquiries] = await Promise.all([api("/api/admin/dashboard"), api("/api/admin/inquiries?view=active")]);
+  const metrics = await api("/api/admin/dashboard");
   const definitions = [
-    ["待认领询价", metrics.unclaimedInquiries, "inquiries"],
-    ["已报价待客户确认", metrics.quotedAwaitingCustomer, "inquiries"],
-    ["已建单待收款", metrics.ordersAwaitingPayment, "orders"],
-    ["收款待核验", metrics.paymentsAwaitingReview, "payments"],
-    ["定金已收待排产", metrics.depositReadyForScheduling, "orders"],
-    ["尾款待收", metrics.balancesOutstanding, "orders"],
-    ["波波同步异常", metrics.boboSyncErrors, "todos"],
-    ["待配送订单", metrics.deliveringSoon, "orders"],
-    ["今日送达订单", metrics.completedToday, "orders"]
+    ["待认领询价", metrics.unclaimedInquiries, "inquiries", { queue: "unclaimed", view: "active" }, "action"],
+    ["已报价待客户确认", metrics.quotedAwaitingCustomer, "inquiries", { queue: "awaiting_customer", view: "active" }, "action"],
+    ["已建单待收款", metrics.ordersAwaitingPayment, "orders", { queue: "awaiting_payment", view: "active" }, "action"],
+    ["收款待核验", metrics.paymentsAwaitingReview, "payments", { status: "pending" }, "action"],
+    ["定金已收待排产", metrics.depositReadyForScheduling, "orders", { queue: "schedule_ready", view: "active" }, "progress"],
+    ["尾款待收", metrics.balancesOutstanding, "orders", { queue: "balance_due", view: "active" }, "action", `未收合计 ${money(metrics.balancesOutstandingAmount)}`],
+    ["波波同步异常", metrics.boboSyncErrors, "todos", { type: "bobo_sync" }, "danger"],
+    ["待配送订单", metrics.deliveringSoon, "orders", { queue: "ready_delivery", view: "active" }, "progress"],
+    ["今日送达订单", metrics.completedToday, "history", { from: todayDate(), to: todayDate(), view: "completed" }, "success"]
   ];
-  const cards = definitions.map(([label, value, view], index) => {
-    const card = element("button", "", `admin-metric metric-${index + 1}`);
+  const cards = definitions.map(([label, value, view, params, tone, detail]) => {
+    const card = element("button", "", `admin-metric tone-${value ? tone : "neutral"}`);
     card.type = "button";
     card.dataset.go = view;
-    card.append(element("span", value || 0), element("strong", label), element("small", "点击查看相关记录 →"));
+    card.dataset.params = JSON.stringify(params);
+    card.append(element("span", value || 0), element("strong", label), element("small", detail || "点击查看相关记录 →"));
     return card;
   });
   byId("dashboard-grid").replaceChildren(...cards);
-  const queue = inquiries.slice(0, 6).map((item) => {
+  const queue = metrics.priorityTasks.map((item) => {
     const row = element("button", "", "admin-queue-item");
     row.type = "button";
-    row.dataset.openInquiry = item.id;
-    row.append(stacked(item.inquiryNumber, dateTime(item.createdAt)), stacked(item.contactName, `${item.region} · ${item.phone}`), badge(item.status));
+    row.dataset.priorityTask = JSON.stringify(item);
+    row.append(stacked(item.title, `优先级 ${item.priority}`), stacked(item.reference, "点击打开对应记录"), badge(item.priority === 1 ? "rejected" : "pending", item.type === "bobo_sync" ? "异常" : "待处理"));
     return row;
   });
-  byId("dashboard-queue").replaceChildren(...queue);
+  byId("dashboard-queue").replaceChildren(...queue.length ? queue : [element("p", "当前没有需要优先处理的任务", "admin-empty")]);
+  updateContext(0);
 }
 
 async function loadInquiries() {
-  const data = await api(`/api/admin/inquiries?${query(byId("inquiry-filter"))}`);
+  const data = await tableApi(`/api/admin/inquiries?${query(byId("inquiry-filter"))}`, "inquiry-table");
   const rows = data.map((item) => {
     const row = document.createElement("tr");
     row.dataset.openInquiry = item.id;
@@ -106,25 +191,47 @@ async function loadInquiries() {
     return row;
   });
   renderRows(byId("inquiry-table").tBodies[0], rows, "暂无符合条件的询价");
+  updateContext(data.length);
 }
 
 async function loadOrders() {
-  const data = await api(`/api/admin/orders?${query(byId("order-filter"))}`);
+  const data = await tableApi(`/api/admin/orders?${query(byId("order-filter"))}`, "order-table");
   const rows = data.map((item) => {
     const row = document.createElement("tr");
     row.dataset.openOrder = item.id;
+    const fulfillment = element("div", "", "admin-order-fulfillment");
+    fulfillment.append(badge(item.status, item.statusText), element("span", item.currentProcess || "尚无工序回传"));
+    const payment = element("div", "", "admin-order-payment-summary");
+    payment.append(
+      element("span", `应收 ${money(item.payment.totalAmount)}`),
+      element("span", `已收 ${money(item.payment.verifiedAmount)}`),
+      element("strong", `未收 ${money(item.payment.remainingAmount)}`)
+    );
     row.append(
-      cell(stacked(item.orderNumber, item.inquiryNumber)), cell(stacked(item.contactName, item.phone)), cell(badge(item.status, item.statusText)), cell(element("span", item.currentProcess)),
-      cell(badge(item.paymentStatus)), cell(stacked(`${money(item.payment.totalAmount)} / ${money(item.payment.verifiedAmount)}`, `未收 ${money(item.payment.remainingAmount)}`)),
-      cell(boboBadge(item.boboSyncStatus)), cell(element("span", dateTime(item.createdAt))), cell(actionButton("查看", "open-order", item.id))
+      labeledCell("订单 / 来源询价", stacked(item.orderNumber, item.inquiryNumber)), labeledCell("客户", stacked(item.contactName, item.phone)),
+      labeledCell("履约状态 / 当前工序", fulfillment), labeledCell("应收金额 / 已收金额 / 未收金额", payment),
+      labeledCell("波波同步", boboBadge(item.boboSyncStatus)), labeledCell("建单时间", element("span", dateTime(item.createdAt))), labeledCell("操作", actionButton("查看", "open-order", item.id))
     );
     return row;
   });
-  renderRows(byId("order-table").tBodies[0], rows, "暂无符合条件的订单");
+  renderRows(byId("order-table").tBodies[0], rows, "暂无符合条件的订单；可调整搜索和日期，或点击“全部履约中”清除条件");
+  updateContext(data.length);
+}
+
+async function loadHistory() {
+  const data = await tableApi(`/api/admin/orders?${query(byId("history-filter"))}`, "history-table");
+  const rows = data.map((item) => {
+    const row = document.createElement("tr");
+    row.dataset.openOrder = item.id;
+    row.append(cell(stacked(item.orderNumber, item.inquiryNumber)), cell(stacked(item.contactName, item.phone)), cell(element("span", item.requirementSummary || "—")), cell(element("strong", money(item.payment.totalAmount))), cell(badge(item.paymentStatus)), cell(element("span", dateTime(item.completedAt))), cell(actionButton("查看", "open-order", item.id)));
+    return row;
+  });
+  renderRows(byId("history-table").tBodies[0], rows, "暂无符合条件的历史订单");
+  updateContext(data.length);
 }
 
 async function loadPayments() {
-  const data = await api(`/api/admin/payments?${query(byId("payment-filter"))}`);
+  const data = await tableApi(`/api/admin/payments?${query(byId("payment-filter"))}`, "payment-table");
   state.payments = new Map(data.map((item) => [String(item.id), item]));
   const rows = data.map((item) => {
     const actions = element("div", "", "admin-inline-actions");
@@ -134,28 +241,39 @@ async function loadPayments() {
       if (state.session.user.role === "super_admin") actions.append(actionButton("作废", "void-payment", item.id));
     }
     const row = document.createElement("tr");
+    row.dataset.paymentId = item.id;
     row.append(cell(element("strong", item.orderNumber)), cell(element("strong", money(item.amount))), cell(stacked(item.payerName, item.paymentMethod)), cell(element("span", dateTime(item.receivedAt))), cell(element("span", item.recordedBy)), cell(stacked(labels[item.status] || item.status, item.verifiedBy || item.reviewReason)), cell(actions));
     return row;
   });
   renderRows(byId("payment-table").tBodies[0], rows, "暂无收款记录");
+  updateContext(data.length);
 }
 
 async function loadCustomers() {
-  const data = await api("/api/admin/customers");
-  const rows = data.map((item) => { const row = document.createElement("tr"); row.append(cell(element("strong", item.contactName || "未命名客户")), cell(element("span", item.phone || "—")), cell(element("span", item.inquiryCount)), cell(element("span", item.orderCount)), cell(element("span", dateTime(item.lastActivityAt))), cell(actionButton("查看往来", "search-customer", item.phone))); return row; });
+  const data = await tableApi("/api/admin/customers", "customer-table");
+  const rows = data.map((item) => { const row = document.createElement("tr"); row.append(cell(element("strong", item.contactName || "未命名客户")), cell(element("span", item.phone || "—")), cell(element("span", item.inquiryCount)), cell(element("span", item.orderCount)), cell(element("span", dateTime(item.lastActivityAt))), cell(actionButton("查看往来", "open-customer", item.phone))); return row; });
   renderRows(byId("customer-table").tBodies[0], rows, "暂无客户档案");
+  updateContext(data.length);
 }
 
 async function loadTodos() {
-  const data = await api("/api/admin/todos");
-  const rows = data.map((item) => { const row = document.createElement("tr"); row.append(cell(element("strong", item.type)), cell(element("span", `${item.entityType} #${item.entityId}`)), cell(element("span", item.detail)), cell(element("span", dateTime(item.createdAt))), cell(badge(item.status))); return row; });
+  const data = await tableApi(`/api/admin/todos?${query(byId("todo-filter"))}`, "todo-table");
+  const rows = data.map((item) => {
+    const row = document.createElement("tr");
+    const actions = element("div", "", "admin-inline-actions");
+    if (item.entityType === "order") actions.append(actionButton("查看订单", "open-order", item.entityId));
+    row.append(cell(element("strong", item.type === "bobo_sync_failed" ? "波波同步异常" : item.type)), cell(element("span", `${item.entityType === "order" ? "订单" : item.entityType} #${item.entityId}`)), cell(element("span", item.detail)), cell(element("span", dateTime(item.createdAt))), cell(badge(item.status)), cell(actions));
+    return row;
+  });
   renderRows(byId("todo-table").tBodies[0], rows, "当前没有异常待办");
+  updateContext(data.length);
 }
 
 async function loadView(view) {
   if (view === "dashboard") return loadDashboard();
   if (view === "inquiries") return loadInquiries();
   if (view === "orders") return loadOrders();
+  if (view === "history") return loadHistory();
   if (view === "payments") return loadPayments();
   if (view === "customers") return loadCustomers();
   return loadTodos();
@@ -168,7 +286,8 @@ async function refreshCurrentView() {
   state.refreshingDetail = true;
   try {
     if (detail.type === "inquiry") await openInquiry(detail.id);
-    else await openOrder(detail.id);
+    else if (detail.type === "order") await openOrder(detail.id);
+    else await openCustomer(detail.id);
   } finally {
     state.refreshingDetail = false;
   }
@@ -178,14 +297,37 @@ function updatedNow() {
   byId("admin-updated-at").textContent = `最后更新：${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date())}`;
 }
 
-function setView(view) {
+function setView(view, params = {}, options = {}) {
+  if (!headings[view]) view = "dashboard";
   state.view = view;
+  applyViewParams(view, params);
   document.querySelectorAll("[data-panel]").forEach((item) => item.classList.toggle("active", item.dataset.panel === view));
   document.querySelectorAll(".admin-sidebar [data-view]").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
   byId("admin-kicker").textContent = headings[view][0];
   byId("admin-title").textContent = headings[view][1];
   document.body.classList.remove("admin-nav-open");
-  return state.refreshController.run();
+  if (!options.skipHash) {
+    const nextHash = buildAdminHash(view, formParams(view));
+    if (location.hash !== nextHash) history.pushState(null, "", nextHash);
+  }
+  updateContext("加载中");
+  return options.latest ? state.refreshController.runLatest() : state.refreshController.run();
+}
+
+async function openPriorityTask(task) {
+  const target = priorityTaskTarget(task);
+  if (target.kind === "drawer") {
+    if (target.entityType === "order") await openOrder(target.entityId);
+    else await openInquiry(target.entityId);
+    return;
+  }
+  await setView(target.view, target.params);
+  if (target.kind !== "payment") return;
+  const row = document.querySelector(`[data-payment-id="${target.entityId}"]`);
+  if (!row) throw new Error("对应收款记录未出现在当前列表，请刷新后重试");
+  row.classList.add("admin-target-row");
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.querySelector("button")?.focus();
 }
 
 function detailSection(title, entries) {
@@ -200,6 +342,7 @@ function detailSection(title, entries) {
 function openDrawer(title, ...content) {
   const drawer = byId("admin-detail");
   const scrollTop = state.refreshingDetail ? drawer.scrollTop : 0;
+  if (!state.refreshingDetail) state.drawerTrigger = document.activeElement;
   byId("detail-title").textContent = title;
   byId("detail-body").replaceChildren(...content);
   byId("admin-detail-backdrop").hidden = false;
@@ -215,6 +358,50 @@ function closeDrawer() {
   document.body.classList.remove("drawer-open");
   state.detail = null;
   state.detailItem = null;
+  if (state.drawerTrigger?.isConnected) state.drawerTrigger.focus();
+  state.drawerTrigger = null;
+}
+
+function customerListSection(title, items, renderItem, view, params) {
+  const section = element("section", "", "admin-detail-section");
+  const header = element("div", "", "admin-section-heading");
+  header.append(element("h3", title));
+  if (view) {
+    const all = actionButton("查看全部", "navigate-filter", view);
+    all.dataset.view = view;
+    all.dataset.params = JSON.stringify(params);
+    header.append(all);
+  }
+  section.append(header);
+  if (!items.length) section.append(element("p", "暂无记录", "admin-empty"));
+  else section.append(...items.map(renderItem));
+  return section;
+}
+
+async function openCustomer(phone) {
+  const item = await api(`/api/admin/customers/detail?phone=${encodeURIComponent(phone)}`);
+  state.detail = { type: "customer", id: phone };
+  state.detailItem = item;
+  const customer = item.customer;
+  const summary = detailSection("客户概况", [["客户", customer.contactName], ["手机号", customer.phone], ["地区", customer.region], ["详细地址", customer.address], ["首次往来", dateTime(customer.firstActivityAt)], ["最近往来", dateTime(customer.lastActivityAt)]]);
+  const metrics = element("section", "", "admin-customer-metrics");
+  [["询价", item.summary.inquiryCount], ["履约中", item.summary.activeOrderCount], ["历史订单", item.summary.historyOrderCount], ["累计已收", money(item.summary.verifiedAmount)], ["待核验", money(item.summary.pendingAmount)], ["未收", money(item.summary.remainingAmount)]].forEach(([label, value]) => {
+    const card = element("div", ""); card.append(element("strong", value), element("span", label)); metrics.append(card);
+  });
+  const inquirySection = customerListSection("最近询价", item.inquiries, (inquiry) => {
+    const row = element("button", "", "admin-customer-row"); row.type = "button"; row.dataset.openInquiry = inquiry.id;
+    row.append(stacked(inquiry.inquiryNumber, dateTime(inquiry.createdAt)), stacked(inquiry.description, labels[inquiry.status] || inquiry.status)); return row;
+  }, "inquiries", { search: phone, view: "all" });
+  const activeSection = customerListSection("履约中订单", item.activeOrders, (order) => {
+    const row = element("button", "", "admin-customer-row"); row.type = "button"; row.dataset.openOrder = order.id;
+    row.append(stacked(order.orderNumber, order.currentProcess), stacked(order.statusText, labels[order.paymentStatus] || order.paymentStatus)); return row;
+  }, "orders", { search: phone, view: "active" });
+  const historySection = customerListSection("历史订单", item.historyOrders, (order) => {
+    const row = element("button", "", "admin-customer-row"); row.type = "button"; row.dataset.openOrder = order.id;
+    row.append(stacked(order.orderNumber, dateTime(order.completedAt)), element("strong", money(order.amount))); return row;
+  }, "history", { search: phone, view: "completed" });
+  const payment = detailSection("收款摘要", [["已确认", money(item.payment.verifiedAmount)], ["待核验", money(item.payment.pendingAmount)], ["剩余应收", money(item.payment.remainingAmount)]]);
+  openDrawer(customer.contactName || phone, metrics, summary, inquirySection, activeSection, historySection, payment);
 }
 
 function attachmentRow(file) {
@@ -306,18 +493,18 @@ async function openOrder(id) {
   syncOrderRow(document.querySelector(`[data-open-order="${Number(id)}"]`), item, badge);
   const actions = element("div", "", "admin-detail-actions");
   const registrationState = paymentRegistrationState(item.payment);
-  if (["initial", "followup"].includes(registrationState)) actions.append(actionButton(registrationState === "initial" ? "登记收款" : "登记后续收款", "register-payment", id, true));
-  if (registrationState === "pending") {
+  if (item.status !== "completed" && ["initial", "followup"].includes(registrationState)) actions.append(actionButton(registrationState === "initial" ? "登记收款" : "登记后续收款", "register-payment", id, true));
+  if (item.status !== "completed" && registrationState === "pending") {
     const pending = actionButton("已有收款待核验", "payment-pending", id);
     pending.disabled = true;
     actions.append(pending);
   }
   if (registrationState === "paid") actions.append(element("span", "已全部收款", "admin-badge status-verified"));
-  if (item.actions.canSchedule && state.session.user.role === "super_admin") {
+  if (item.status !== "completed" && item.actions.canSchedule && state.session.user.role === "super_admin") {
     if (["not_ready", "awaiting_confirmation"].includes(item.boboSyncStatus)) actions.append(actionButton("手动补提波波", "sync-bobo", id));
     if (["retrying", "failed"].includes(item.boboSyncStatus)) actions.append(actionButton("重试波波同步", "retry-bobo", id));
   }
-  if (state.session.user.role === "super_admin") {
+  if (item.status !== "completed" && state.session.user.role === "super_admin") {
     const next = { awaiting_schedule: ["production", "进入生产"], production: ["quality", "进入质检"], quality: ["ready", "进入待配送"], ready: ["shipped", "确认配送中"], shipped: ["completed", "确认已送达"] }[item.status];
     if (next) actions.append(actionButton(next[1], "advance-order", `${id}:${next[0]}`));
   }
@@ -327,6 +514,7 @@ async function openOrder(id) {
   for (const payment of item.payments) {
     const record = stacked(`${money(payment.amount)} · ${labels[payment.status] || payment.status}`, `${payment.paymentMethod} · ${payment.payerName} · ${dateTime(payment.receivedAt)}${payment.note ? ` · ${payment.note}` : ""}`);
     record.append(paymentProofCard({ ...payment, orderNumber: item.orderNumber }, true));
+    if (payment.status === "verified") record.append(actionButton("预览收据", "receipt", payment.id));
     paymentList.append(record);
   }
 
@@ -526,7 +714,12 @@ function openQuote(id) {
   form.reset();
   form.elements.inquiryId.value = id;
   const values = quoteFormValues(state.detailItem || {});
-  for (const [name, value] of Object.entries(values)) form.elements[name].value = value;
+  for (const [name, value] of Object.entries(values)) if (form.elements[name]) form.elements[name].value = value;
+  const incoming = String(state.detailItem?.process || "").split(/[、,，]/).map((value) => value.trim()).filter(Boolean);
+  const fixed = new Set(incoming.filter((value) => PROCESS_ORDER.includes(value)));
+  form.querySelectorAll("[name='processOption']").forEach((input) => { input.checked = fixed.has(input.value); });
+  form.elements.otherProcess.value = incoming.filter((value) => !fixed.has(value)).join("、");
+  updateQuoteProcessPreview();
   showFormResult("quote-result");
   byId("quote-dialog").showModal();
 }
@@ -616,15 +809,24 @@ async function submitAction(reason) {
 }
 
 document.addEventListener("click", async (event) => {
-  const navigation = event.target.closest("[data-view]");
-  if (navigation) return setView(navigation.dataset.view);
-  const shortcut = event.target.closest("[data-go]");
-  if (shortcut) return setView(shortcut.dataset.go);
-  const inquiry = event.target.closest("[data-open-inquiry], [data-action='open-inquiry']");
+  const clicked = event.target instanceof Element ? event.target : null;
+  if (!clicked) return;
+  const orderScope = clicked.closest("[data-order-scope]");
+  if (orderScope) {
+    event.preventDefault();
+    return state.orderScopeController.change(orderScope.dataset.orderScope);
+  }
+  const navigation = clicked.closest("[data-view]");
+  if (navigation && navigation.closest(".admin-sidebar")) return setView(navigation.dataset.view);
+  const shortcut = clicked.closest("[data-go]");
+  if (shortcut) return setView(shortcut.dataset.go, JSON.parse(shortcut.dataset.params || "{}"));
+  const priorityTask = clicked.closest("[data-priority-task]");
+  if (priorityTask) return openPriorityTask(JSON.parse(priorityTask.dataset.priorityTask)).catch((error) => showNotice(error.message, true));
+  const inquiry = clicked.closest("[data-open-inquiry], [data-action='open-inquiry']");
   if (inquiry) return openInquiry(inquiry.dataset.openInquiry || inquiry.dataset.id).catch((error) => showNotice(error.message, true));
-  const order = event.target.closest("[data-open-order], [data-action='open-order']");
+  const order = clicked.closest("[data-open-order], [data-action='open-order']");
   if (order) return openOrder(order.dataset.openOrder || order.dataset.id).catch((error) => showNotice(error.message, true));
-  const target = event.target.closest("[data-action]");
+  const target = clicked.closest("[data-action]");
   if (!target) return;
   try {
     if (target.dataset.action === "claim-inquiry") { await api(`/api/admin/inquiries/${target.dataset.id}/claim`, { method: "POST", body: "{}" }); await openInquiry(target.dataset.id); }
@@ -636,12 +838,28 @@ document.addEventListener("click", async (event) => {
     if (target.dataset.action === "preview-quote") await previewQuote(target.dataset.id);
     if (target.dataset.action === "receipt") await previewReceipt(target.dataset.id);
     if (["sync-bobo", "retry-bobo", "advance-order"].includes(target.dataset.action)) openAction(target.dataset.action, target.dataset.id);
-    if (target.dataset.action === "search-customer") { setView("orders"); byId("order-filter").elements.search.value = target.dataset.id; await loadOrders(); }
+    if (target.dataset.action === "open-customer") await openCustomer(target.dataset.id);
+    if (target.dataset.action === "navigate-filter") { closeDrawer(); await setView(target.dataset.view, JSON.parse(target.dataset.params || "{}")); }
   } catch (error) { showNotice(error.message, true); }
 });
 
-for (const formId of ["inquiry-filter", "order-filter", "payment-filter"]) {
-  byId(formId).addEventListener("submit", (event) => { event.preventDefault(); state.refreshController.run(); });
+for (const formId of ["inquiry-filter", "order-filter", "history-filter", "payment-filter", "todo-filter"]) {
+  byId(formId).addEventListener("submit", (event) => {
+    event.preventDefault();
+    const hash = buildAdminHash(state.view, formParams(state.view));
+    if (location.hash !== hash) history.pushState(null, "", hash);
+    state.refreshController.run();
+  });
+}
+
+function updateQuoteProcessPreview() {
+  const form = byId("quote-form");
+  const selected = [...form.querySelectorAll("[name='processOption']:checked")].map((item) => item.value);
+  const process = serializeProcesses(selected, form.elements.otherProcess.value);
+  const preview = byId("quote-process-preview");
+  preview.classList.remove("error");
+  preview.textContent = `报价单工艺：${process || "尚未选择"}`;
+  return process;
 }
 
 byId("quote-form").addEventListener("submit", async (event) => {
@@ -651,14 +869,23 @@ byId("quote-form").addEventListener("submit", async (event) => {
   submit.disabled = true;
   showFormResult("quote-result");
   try {
-    const specification = {};
-    for (const name of ["requirement", "material", "thickness", "dimensions", "process", "quantity", "expectedDate", "technicalRequirements", "remark"]) specification[name] = name === "quantity" ? Number(form.elements[name].value) : form.elements[name].value.trim();
+    const process = updateQuoteProcessPreview();
+    if (!process) {
+      byId("quote-process-preview").classList.add("error");
+      throw new Error("请至少选择一个工序或填写其他工艺");
+    }
+    const specification = { technicalRequirements: "", process };
+    for (const name of ["requirement", "material", "thickness", "dimensions", "quantity", "expectedDate", "remark"]) specification[name] = name === "quantity" ? Number(form.elements[name].value) : form.elements[name].value.trim();
     await api(`/api/admin/inquiries/${form.elements.inquiryId.value}/quotes`, { method: "POST", body: JSON.stringify({ amount: Number(form.elements.amount.value), validUntil: form.elements.validUntil.value, paymentMode: form.elements.paymentMode.value, startAmount: Number(form.elements.startAmount.value), confirmed: true, specification }) });
     byId("quote-dialog").close();
     await openInquiry(form.elements.inquiryId.value);
     showNotice("报价已确认，可在报价版本中查看报价单");
   } catch (error) { showFormResult("quote-result", error.message, true); }
   finally { submit.disabled = false; }
+});
+
+byId("quote-form").addEventListener("input", (event) => {
+  if (event.target.matches("[name='processOption'], [name='otherProcess']")) updateQuoteProcessPreview();
 });
 
 byId("quote-form").elements.paymentMode.addEventListener("change", (event) => {
@@ -723,9 +950,14 @@ byId("detail-close").addEventListener("click", closeDrawer);
 byId("admin-detail-backdrop").addEventListener("click", closeDrawer);
 byId("admin-menu").addEventListener("click", () => document.body.classList.toggle("admin-nav-open"));
 byId("admin-refresh").addEventListener("click", () => state.refreshController?.run());
+
+document.querySelectorAll("[data-reset-filter]").forEach((button) => button.addEventListener("click", () => setView(state.view)));
 document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !document.querySelector("dialog[open]") && !byId("admin-detail").hidden) closeDrawer(); });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") state.refreshController?.run(); });
 window.addEventListener("focus", () => state.refreshController?.run());
+function loadLocationRoute() { const route = parseAdminHash(location.hash); setView(route.view, route.params, { skipHash: true, latest: true }); }
+window.addEventListener("popstate", loadLocationRoute);
+window.addEventListener("hashchange", loadLocationRoute);
 byId("admin-logout").addEventListener("click", async () => { state.refreshController?.stop(); await api("/api/admin/auth/logout", { method: "POST", body: "{}" }); location.reload(); });
 
 async function initialize() {
@@ -738,11 +970,18 @@ async function initialize() {
     state.refreshController = createRefreshController({
       refresh: refreshCurrentView,
       canRefresh: () => Boolean(state.session) && document.visibilityState === "visible" && state.pendingWrites === 0,
+      canForceRefresh: () => Boolean(state.session) && state.pendingWrites === 0,
       onUpdated: updatedNow,
-      onError: (error) => showNotice(`自动刷新失败：${error.message}`, true)
+      onError: (error) => { updateContext("加载失败"); showNotice(`自动刷新失败：${error.message}`, true); }
+    });
+    state.orderScopeController = createOrderScopeController({
+      setBusy: setOrderScopeBusy,
+      navigate: (params) => setView("orders", params, { latest: true }),
+      onError: (error) => showNotice(`订单范围切换失败：${error.message}`, true)
     });
     state.refreshController.start();
-    setView("dashboard");
+    const route = parseAdminHash(location.hash);
+    setView(route.view, route.params, { skipHash: Boolean(location.hash) });
   } catch {
     byId("admin-auth").hidden = false;
     byId("admin-workspace").hidden = true;

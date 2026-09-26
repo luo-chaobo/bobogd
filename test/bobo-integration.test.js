@@ -58,9 +58,9 @@ test("accepts one signed bobo event and exposes only the public process timeline
 
     const productionOrders = await request(baseUrl, "/api/admin/orders", { headers: { authorization: "Bearer admin-token" } });
     assert.equal(productionOrders.body[0].status, "production");
-    assert.equal(productionOrders.body[0].currentProcess, "激光已完成，等待下一工序");
+    assert.equal(productionOrders.body[0].currentProcess, "激光已完成");
     const productionOrder = await request(baseUrl, `/api/admin/orders/${paid.body.id}`, { headers: { authorization: "Bearer admin-token" } });
-    assert.equal(productionOrder.body.currentProcess, "激光已完成，等待下一工序");
+    assert.equal(productionOrder.body.currentProcess, "激光已完成");
 
     const activeEvent = { eventId: "evt-2", sequence: 2, workOrderId: "work-1", externalOrderNumber: paid.body.orderNumber, type: "process.updated", occurredAt: "2026-09-05T10:30:00.000Z", allProcessesCompleted: false, process: { id: "route-2", sequence: 2, name: "焊接", status: "进行中", startedAt: "2026-09-05T10:30:00.000Z", completedAt: "" } };
     const activeBody = JSON.stringify(activeEvent);

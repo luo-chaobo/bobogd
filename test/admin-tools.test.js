@@ -35,6 +35,71 @@ test("refresh controller skips hidden or busy states", async () => {
   assert.equal(calls, 1);
 });
 
+test("user-triggered latest refresh bypasses the automatic pause guard", async () => {
+  let calls = 0;
+  const controller = tools.createRefreshController({
+    refresh: async () => { calls += 1; },
+    canRefresh: () => false
+  });
+
+  assert.equal(await controller.run(), false);
+  assert.equal(await controller.runLatest(), true);
+  assert.equal(calls, 1);
+});
+
+test("waits for an in-flight write before refreshing the selected order scope", async () => {
+  let writePending = true;
+  let calls = 0;
+  const controller = tools.createRefreshController({
+    refresh: async () => { calls += 1; },
+    canRefresh: () => false,
+    canForceRefresh: () => !writePending
+  });
+
+  const latest = controller.runLatest();
+  assert.equal(calls, 0);
+  writePending = false;
+  controller.resume();
+  assert.equal(await latest, true);
+  assert.equal(calls, 1);
+});
+
+test("waits for the latest queued refresh requested by a user action", async () => {
+  const resolvers = [];
+  let calls = 0;
+  const controller = tools.createRefreshController({
+    refresh: () => { calls += 1; return new Promise((resolve) => resolvers.push(resolve)); },
+    canRefresh: () => true
+  });
+
+  const automatic = controller.run();
+  const latest = controller.runLatest();
+  assert.equal(calls, 1);
+  resolvers.shift()();
+  assert.equal(await automatic, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 2);
+  resolvers.shift()();
+  assert.equal(await latest, true);
+});
+
+test("shows a loading skeleton only after the 300 millisecond threshold", () => {
+  let task;
+  let cleared = false;
+  let shown = 0;
+  const loading = tools.createLoadingDelay({
+    show: () => { shown += 1; },
+    setTimeoutFn: (callback, delay) => { assert.equal(delay, 300); task = callback; return 9; },
+    clearTimeoutFn: (id) => { assert.equal(id, 9); cleared = true; }
+  });
+  loading.start();
+  assert.equal(shown, 0);
+  task();
+  assert.equal(shown, 1);
+  loading.stop();
+  assert.equal(cleared, true);
+});
+
 test("synchronizes an order list row with the freshly loaded drawer detail", () => {
   const cells = Array.from({ length: 4 }, () => ({ textContent: "", replaceChildren(value) { this.value = value; } }));
   const badge = { textContent: "已送达" };
@@ -96,16 +161,65 @@ test("draws a customer quote sheet with centered headings and versioned requirem
   for (const value of ["XQ-20260919-0001-V2", "设备防护罩", "304不锈钢", "1.5 mm", "¥8,000.00"]) {
     assert.equal(calls.some((item) => item.text === value), true, `missing ${value}`);
   }
+  assert.ok(calls.some(({ text }) => text === "报价有效期"));
+  assert.ok(calls.some(({ text }) => text === "加工需求"));
+  assert.ok(!calls.some(({ text }) => text === "有效期" || text === "需求与技术要求"));
 });
 
 test("builds editable quote fields from the current inquiry", () => {
   assert.deepEqual(tools.quoteFormValues({
-    description: "设备护罩", material: "304不锈钢", dimensions: "800×500×300 mm",
+    description: "设备护罩", technicalRequirements: "去毛刺", material: "304不锈钢", dimensions: "800×500×300 mm",
     quantity: 2, expectedDate: "2026-10-10"
   }), {
-    requirement: "设备护罩", material: "304不锈钢", thickness: "", dimensions: "800×500×300 mm",
+    requirement: "设备护罩\n去毛刺", material: "304不锈钢", thickness: "", dimensions: "800×500×300 mm",
     process: "", quantity: 2, expectedDate: "2026-10-10", technicalRequirements: "", remark: ""
   });
+});
+
+test("normalizes admin hash state for precise task links", () => {
+  assert.deepEqual(tools.parseAdminHash("#orders?queue=balance_due&search=13800000000"), {
+    view: "orders", params: { queue: "balance_due", search: "13800000000" }
+  });
+  assert.equal(tools.buildAdminHash("history", { from: "2026-09-24", to: "2026-09-24", empty: "" }), "#history?from=2026-09-24&to=2026-09-24");
+});
+
+test("clears every order filter when returning to the all-active overview", () => {
+  assert.deepEqual(tools.orderScopeParams("balance_due"), { view: "active", queue: "balance_due" });
+  assert.deepEqual(tools.resetOrderQuery(), { view: "active" });
+  assert.deepEqual(tools.orderScopeParams("all"), { view: "active" });
+});
+
+test("runs an order scope change once with visible busy and error states", async () => {
+  const states = [];
+  const navigations = [];
+  const errors = [];
+  const controller = tools.createOrderScopeController({
+    setBusy: (busy) => states.push(busy),
+    navigate: async (params) => navigations.push(params),
+    onError: (error) => errors.push(error.message)
+  });
+
+  assert.equal(await controller.change("all"), true);
+  assert.deepEqual(navigations, [{ view: "active" }]);
+  assert.deepEqual(states, [true, false]);
+
+  controller.setNavigate(async () => { throw new Error("订单加载失败"); });
+  assert.equal(await controller.change("balance_due"), false);
+  assert.deepEqual(errors, ["订单加载失败"]);
+  assert.deepEqual(states, [true, false, true, false]);
+});
+
+test("routes priority tasks to their exact business object", () => {
+  assert.deepEqual(tools.priorityTaskTarget({ entityType: "order", entityId: 15 }), { kind: "drawer", entityType: "order", entityId: 15 });
+  assert.deepEqual(tools.priorityTaskTarget({ entityType: "inquiry", entityId: 8 }), { kind: "drawer", entityType: "inquiry", entityId: 8 });
+  assert.deepEqual(tools.priorityTaskTarget({ entityType: "payment", entityId: 20 }), { kind: "payment", view: "payments", params: { status: "pending" }, entityId: 20 });
+});
+
+test("merges quote requirements once and orders selected processes canonically", () => {
+  assert.equal(tools.mergeRequirements("设备护罩", "去毛刺、锐边倒钝"), "设备护罩\n去毛刺、锐边倒钝");
+  assert.equal(tools.mergeRequirements("设备护罩", "设备护罩"), "设备护罩");
+  assert.equal(tools.serializeProcesses(["质检", "折弯", "激光", "折弯"], "电镀、线切割"), "激光、折弯、质检、电镀、线切割");
+  assert.equal(tools.serializeProcesses([], "  "), "");
 });
 
 test("describes payment verification without misreporting an existing bobo task", () => {

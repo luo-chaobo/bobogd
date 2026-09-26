@@ -91,6 +91,57 @@ test("creates one unpaid order from a confirmed quote and freezes inquiry detail
   });
 });
 
+test("uses the same queue predicates for dashboard counts and filtered lists", async () => {
+  await withApp(async (baseUrl, app) => {
+    const firstInquiry = await createQuotedInquiry(baseUrl);
+    const firstOrder = await request(baseUrl, `/api/admin/inquiries/${firstInquiry}/order-confirmation`, { method: "POST", headers: adminHeaders, body: "{}" });
+    const secondInquiry = await request(baseUrl, "/api/inquiries", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ drawingMode: "none", contactName: "李女士", phone: "13900000002", region: "宁波", quantity: 1, expectedDate: "2026-10-02", description: "机箱" })
+    });
+    assert.equal(secondInquiry.status, 201);
+
+    const dashboard = await request(baseUrl, "/api/admin/dashboard", { headers: adminHeaders });
+    const unclaimed = await request(baseUrl, "/api/admin/inquiries?queue=unclaimed", { headers: adminHeaders });
+    const awaitingPayment = await request(baseUrl, "/api/admin/orders?queue=awaiting_payment", { headers: adminHeaders });
+    assert.equal(dashboard.body.unclaimedInquiries, unclaimed.body.length);
+    assert.equal(dashboard.body.ordersAwaitingPayment, awaitingPayment.body.length);
+    assert.deepEqual(awaitingPayment.body.map((item) => item.id), [firstOrder.body.id]);
+    assert.ok(Array.isArray(dashboard.body.priorityTasks));
+
+    app.database.prepare("INSERT INTO bobo_sync_jobs (order_id, status, last_error, next_attempt_at, created_at, updated_at) VALUES (?, 'retrying', '波波暂时离线', ?, ?, ?)")
+      .run(firstOrder.body.id, "2026-09-13T08:05:00.000Z", "2026-09-13T08:00:00.000Z", "2026-09-13T08:00:00.000Z");
+    const refreshedDashboard = await request(baseUrl, "/api/admin/dashboard", { headers: adminHeaders });
+    const boboTodos = await request(baseUrl, "/api/admin/todos?type=bobo_sync", { headers: adminHeaders });
+    assert.equal(refreshedDashboard.body.boboSyncErrors, 1);
+    assert.equal(refreshedDashboard.body.boboSyncErrors, boboTodos.body.length);
+    assert.equal(boboTodos.body[0].entityId, firstOrder.body.id);
+  });
+});
+
+test("separates completed history by completion date and exposes customer correspondence", async () => {
+  await withApp(async (baseUrl, app) => {
+    const inquiryId = await createQuotedInquiry(baseUrl, "full");
+    const created = await request(baseUrl, `/api/admin/inquiries/${inquiryId}/order-confirmation`, { method: "POST", headers: adminHeaders, body: "{}" });
+    app.database.prepare("UPDATE orders SET status = 'completed', completed_at = ? WHERE id = ?").run("2026-09-13T06:30:00.000Z", created.body.id);
+
+    const active = await request(baseUrl, "/api/admin/orders", { headers: adminHeaders });
+    const history = await request(baseUrl, "/api/admin/orders?view=completed&from=2026-09-13&to=2026-09-13", { headers: adminHeaders });
+    assert.equal(active.body.length, 0);
+    assert.equal(history.body.length, 1);
+    assert.equal(history.body[0].completedAt, "2026-09-13T06:30:00.000Z");
+    assert.match(history.body[0].requirementSummary, /设备防护罩/);
+
+    const customer = await request(baseUrl, "/api/admin/customers/detail?phone=13812345678", { headers: adminHeaders });
+    assert.equal(customer.status, 200);
+    assert.equal(customer.body.summary.inquiryCount, 1);
+    assert.equal(customer.body.summary.activeOrderCount, 0);
+    assert.equal(customer.body.summary.historyOrderCount, 1);
+    assert.equal(customer.body.historyOrders[0].orderNumber, created.body.orderNumber);
+    assert.equal(customer.body.customer.address, "大碶街道沿山河北路88号");
+  });
+});
+
 test("stores an editable requirement snapshot on each quote version", async () => {
   await withApp(async (baseUrl) => {
     const inquiry = await request(baseUrl, "/api/inquiries", {
@@ -98,12 +149,18 @@ test("stores an editable requirement snapshot on each quote version", async () =
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ drawingMode: "none", contactName: "陈先生", phone: "13800000001", region: "宁波", quantity: 4, expectedDate: "2026-10-15", description: "机架外壳", material: "Q235B", dimensions: "600×400×300 mm" })
     });
-    const specification = { requirement: "控制柜外壳", material: "SECC", thickness: "1.5 mm", dimensions: "600×400×300 mm", process: "激光、折弯、喷塑", quantity: 4, expectedDate: "2026-10-15", technicalRequirements: "RAL7035，无毛刺", remark: "含独立包装" };
+    const specification = { requirement: "技".repeat(600), material: "SECC", thickness: "1.5 mm", dimensions: "600×400×300 mm", process: "激光、折弯、喷塑", quantity: 4, expectedDate: "2026-10-15", technicalRequirements: "RAL7035，无毛刺", remark: "含独立包装" };
     const invalid = await request(baseUrl, `/api/admin/inquiries/${inquiry.body.id}/quotes`, {
       method: "POST", headers: adminHeaders,
       body: JSON.stringify({ amount: 4800, validUntil: "2026-09-30", confirmed: true, paymentMode: "full", startAmount: 4800, specification: { ...specification, quantity: 0 } })
     });
     assert.equal(invalid.status, 422);
+    const missingProcess = await request(baseUrl, `/api/admin/inquiries/${inquiry.body.id}/quotes`, {
+      method: "POST", headers: adminHeaders,
+      body: JSON.stringify({ amount: 4800, validUntil: "2026-09-30", confirmed: true, paymentMode: "full", startAmount: 4800, specification: { ...specification, process: "" } })
+    });
+    assert.equal(missingProcess.status, 422);
+    assert.equal(missingProcess.body.message, "请至少选择一个加工工序");
     const first = await request(baseUrl, `/api/admin/inquiries/${inquiry.body.id}/quotes`, {
       method: "POST", headers: adminHeaders,
       body: JSON.stringify({ amount: 4800, validUntil: "2026-09-30", confirmed: true, paymentMode: "full", startAmount: 4800, specification })

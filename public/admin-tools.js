@@ -3,16 +3,115 @@
   if (typeof module === "object" && module.exports) module.exports = tools;
   else root.AdminTools = tools;
 })(typeof globalThis === "object" ? globalThis : this, function createAdminTools() {
+  const PROCESS_ORDER = ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "机加", "打磨", "喷塑", "装配", "质检"];
+
+  function mergeRequirements(requirement, technicalRequirements) {
+    const parts = [requirement, technicalRequirements].map((value) => String(value || "").trim()).filter(Boolean);
+    return [...new Set(parts)].join("\n");
+  }
+
+  function serializeProcesses(selected, other = "") {
+    const choices = new Set((selected || []).map((value) => String(value).trim()).filter(Boolean));
+    const fixed = PROCESS_ORDER.filter((value) => choices.has(value));
+    const extras = String(other || "").split(/[、,，]/).map((value) => value.trim()).filter(Boolean);
+    return [...new Set([...fixed, ...extras])].join("、");
+  }
+
+  function parseAdminHash(hash) {
+    const source = String(hash || "").replace(/^#/, "");
+    const [view = "dashboard", query = ""] = source.split("?");
+    return { view: view || "dashboard", params: Object.fromEntries(new URLSearchParams(query)) };
+  }
+
+  function buildAdminHash(view, params = {}) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (String(value || "").trim()) query.set(key, value);
+    return `#${view}${query.size ? `?${query}` : ""}`;
+  }
+
+  function orderScopeParams(scope) {
+    const queue = String(scope || "").trim();
+    return queue && queue !== "all" ? { view: "active", queue } : { view: "active" };
+  }
+
+  function resetOrderQuery() {
+    return orderScopeParams("all");
+  }
+
+  function createOrderScopeController(options) {
+    let navigate = options.navigate;
+    return {
+      setNavigate(next) { navigate = next; },
+      async change(scope) {
+        options.setBusy(true);
+        try {
+          await navigate(scope === "all" ? resetOrderQuery() : orderScopeParams(scope));
+          return true;
+        } catch (error) {
+          options.onError(error);
+          return false;
+        } finally {
+          options.setBusy(false);
+        }
+      }
+    };
+  }
+
+  function priorityTaskTarget(task = {}) {
+    const entityId = Number(task.entityId);
+    if (["order", "inquiry"].includes(task.entityType) && Number.isSafeInteger(entityId) && entityId > 0) {
+      return { kind: "drawer", entityType: task.entityType, entityId };
+    }
+    if (task.entityType === "payment" && Number.isSafeInteger(entityId) && entityId > 0) {
+      return { kind: "payment", view: "payments", params: { status: "pending" }, entityId };
+    }
+    return { kind: "view", view: task.view || "dashboard", params: task.params || {} };
+  }
+
+  function createLoadingDelay(options) {
+    const setTimeoutFn = options.setTimeoutFn || setTimeout;
+    const clearTimeoutFn = options.clearTimeoutFn || clearTimeout;
+    let timer = null;
+    return {
+      start() { if (timer === null) timer = setTimeoutFn(options.show, 300); },
+      stop() { if (timer !== null) clearTimeoutFn(timer); timer = null; }
+    };
+  }
+
   function createRefreshController(options) {
     const setIntervalFn = options.setIntervalFn || setInterval;
     const clearIntervalFn = options.clearIntervalFn || clearInterval;
     let timer = null;
     let running = false;
     let queued = false;
+    let queuedForce = false;
+    let latestPromise = null;
+    let resolveLatest = null;
 
-    async function run() {
-      if (running) { queued = true; return false; }
-      if (!options.canRefresh()) return false;
+    function queueLatest() {
+      queued = true;
+      queuedForce = true;
+      if (!latestPromise) latestPromise = new Promise((resolve) => { resolveLatest = resolve; });
+      return latestPromise;
+    }
+
+    function resume() {
+      if (running || !queued) return;
+      const forceNext = queuedForce;
+      if (forceNext && options.canForceRefresh && !options.canForceRefresh()) return;
+      if (!forceNext && !options.canRefresh()) { queued = false; return; }
+      queued = false;
+      queuedForce = false;
+      const resolve = resolveLatest;
+      latestPromise = null;
+      resolveLatest = null;
+      run(forceNext).then((result) => { if (resolve) resolve(result); });
+    }
+
+    async function run(force = false) {
+      if (running) { queued = true; queuedForce ||= force; return false; }
+      if (force && options.canForceRefresh && !options.canForceRefresh()) return false;
+      if (!force && !options.canRefresh()) return false;
       running = true;
       try {
         await options.refresh();
@@ -23,8 +122,13 @@
         return false;
       } finally {
         running = false;
-        if (queued) { queued = false; run(); }
+        resume();
       }
+    }
+
+    function runLatest() {
+      if (running || (options.canForceRefresh && !options.canForceRefresh())) return queueLatest();
+      return run(true);
     }
 
     function start() {
@@ -36,7 +140,7 @@
       timer = null;
     }
 
-    return { run, start, stop };
+    return { run, runLatest, resume, start, stop };
   }
 
   function syncOrderRow(row, detail, createBadge) {
@@ -133,13 +237,15 @@
   function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 2) {
     const source = String(text || "—");
     const lines = [];
-    let line = "";
-    for (const character of source) {
-      const candidate = line + character;
-      if (line && context.measureText(candidate).width > maxWidth) { lines.push(line); line = character; }
-      else line = candidate;
+    for (const paragraph of source.split("\n")) {
+      let line = "";
+      for (const character of paragraph) {
+        const candidate = line + character;
+        if (line && context.measureText(candidate).width > maxWidth) { lines.push(line); line = character; }
+        else line = candidate;
+      }
+      if (line) lines.push(line);
     }
-    if (line) lines.push(line);
     lines.slice(0, maxLines).forEach((item, index) => context.fillText(item, x, y + index * lineHeight));
   }
 
@@ -153,16 +259,16 @@
     context.font = "700 42px Microsoft YaHei"; context.fillText(quote.companyName, 800, 130);
     context.font = "700 56px Microsoft YaHei"; context.fillText("报 价 单", 800, 205);
     context.textAlign = "left"; context.fillStyle = "#101820"; context.font = "500 27px Microsoft YaHei";
-    const header = [["报价单号", `${quote.inquiryNumber}-V${quote.version}`], ["客户", quote.customerName], ["报价日期", quote.quotedAtText], ["有效期", quote.validUntil]];
+    const header = [["报价单号", `${quote.inquiryNumber}-V${quote.version}`], ["客户", quote.customerName], ["报价日期", quote.quotedAtText], ["报价有效期", quote.validUntil]];
     header.forEach(([label, value], index) => {
       const column = index % 2; const row = Math.floor(index / 2); const x = 120 + column * 730; const y = 315 + row * 58;
       context.fillStyle = "#62707a"; context.fillText(label, x, y); context.fillStyle = "#101820"; context.fillText(value || "—", x + 145, y);
     });
     context.strokeStyle = "#d7dde1"; context.lineWidth = 2; context.strokeRect(110, 425, 1380, 450);
     const rows = [
-      ["需求内容", specification.requirement], ["材料", specification.material], ["厚度", specification.thickness],
-      ["尺寸", specification.dimensions], ["加工工艺", specification.process], ["数量", specification.quantity],
-      ["期望交期", specification.expectedDate], ["技术要求", specification.technicalRequirements], ["备注", specification.remark]
+      ["加工需求", mergeRequirements(specification.requirement, specification.technicalRequirements)],
+      ["材料", specification.material], ["厚度", specification.thickness], ["尺寸", specification.dimensions],
+      ["加工工艺", specification.process], ["数量", specification.quantity], ["期望交期", specification.expectedDate], ["备注", specification.remark]
     ];
     rows.forEach(([label, value], index) => {
       const y = 480 + index * 44;
@@ -184,7 +290,7 @@
 
   function quoteFormValues(inquiry) {
     return {
-      requirement: String(inquiry.description || ""),
+      requirement: mergeRequirements(inquiry.description, inquiry.technicalRequirements),
       material: String(inquiry.material || ""),
       thickness: "",
       dimensions: String(inquiry.dimensions || ""),
@@ -274,5 +380,5 @@
     return { ...definition, reference: context.reference || "" };
   }
 
-  return { createRefreshController, syncOrderRow, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition };
+  return { PROCESS_ORDER, createRefreshController, createOrderScopeController, createLoadingDelay, syncOrderRow, parseDxf, drawReceipt, drawQuoteSheet, quoteFormValues, mergeRequirements, serializeProcesses, parseAdminHash, buildAdminHash, orderScopeParams, resetOrderQuery, priorityTaskTarget, paymentVerificationMessage, paymentRegistrationState, auditActionLabel, formatAuditDetail, adminActionDefinition };
 });

@@ -115,7 +115,11 @@ function currentProcessLabel(order, processes) {
   if (completed) return "工序已全部完成";
   const active = processes.find((item) => item.status !== "已完成");
   if (active) return `${active.name} · ${active.status}`;
-  return `${processes.at(-1).name}已完成，等待下一工序`;
+  return `${processes.at(-1).name}已完成`;
+}
+
+function shanghaiDate(value) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
 }
 
 function boboAuditDetail(event) {
@@ -128,7 +132,7 @@ function boboAuditDetail(event) {
 function serveStatic(request, response, pathname) {
   const requested = pathname === "/" ? "index.html" : pathname.slice(1);
   const isImage = /^assets\/images\/[a-z0-9-]+\.(jpg|jpeg|png|webp)$/.test(requested)
-    || requested === "assets/images/factory-location-map.svg";
+    || new Set(["assets/images/factory-location-map.svg", "assets/images/factory-digital-flow.svg"]).has(requested);
   const isBrandAsset = /^assets\/brand\/[a-z0-9-]+\.(svg|png)$/.test(requested);
   const isVideo = /^assets\/video\/[a-z0-9-]+\.mp4$/.test(requested);
   const isPage = /^(?:[a-z0-9-]+|news\/[a-z0-9-]+)\.html$/.test(requested);
@@ -301,6 +305,26 @@ function createApplication(options = {}) {
     };
   }
 
+  function inquiryMatchesQueue(row, queue) {
+    if (!queue) return true;
+    if (queue === "unclaimed") return !row.claimed_at && !["ordered", "closed"].includes(row.status);
+    if (queue === "awaiting_customer") return row.status === "quoted";
+    return false;
+  }
+
+  function orderMatchesQueue(row, queue, summary = paymentSummary(row.id)) {
+    if (!queue) return true;
+    if (queue === "awaiting_payment") return row.status !== "completed" && summary.verifiedAmount === 0;
+    if (queue === "schedule_ready") return row.status === "awaiting_schedule" && summary.verifiedAmount >= summary.startAmount;
+    if (queue === "balance_due") return row.status !== "completed" && summary.verifiedAmount >= summary.startAmount && summary.remainingAmount > 0;
+    if (queue === "ready_delivery") return row.status === "ready";
+    return false;
+  }
+
+  function orderRequirement(row) {
+    try { return JSON.parse(row.requirement_snapshot || "{}"); } catch { return {}; }
+  }
+
   function refreshOrderPayment(orderId) {
     const order = db.prepare("SELECT status FROM orders WHERE id = ?").get(orderId);
     const summary = paymentSummary(orderId);
@@ -316,7 +340,7 @@ function createApplication(options = {}) {
     const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
     const text = (key, fallback = "", limit = 500) => String(source[key] ?? fallback).trim().slice(0, limit);
     return {
-      requirement: text("requirement", inquiry.description),
+      requirement: text("requirement", inquiry.description, 800),
       material: text("material", inquiry.material, 120),
       thickness: text("thickness", "", 80),
       dimensions: text("dimensions", inquiry.dimensions, 200),
@@ -567,6 +591,40 @@ function createApplication(options = {}) {
       status: row.status,
       createdAt: row.created_at
     };
+  }
+
+  function boboExceptions() {
+    const todos = db.prepare("SELECT id, entity_id, detail, created_at, resolved_at FROM admin_todos WHERE status = 'open' AND type = 'bobo_sync_failed' ORDER BY id DESC").all();
+    const jobs = db.prepare("SELECT id, order_id, last_error, updated_at FROM bobo_sync_jobs WHERE status = 'retrying' ORDER BY id DESC").all();
+    const seenOrders = new Set();
+    const items = [];
+    for (const job of jobs) {
+      seenOrders.add(Number(job.order_id));
+      items.push({
+        id: `bobo-job-${job.id}`,
+        type: "bobo_sync_failed",
+        entityType: "order",
+        entityId: Number(job.order_id),
+        detail: job.last_error || "波波同步等待重试",
+        status: "open",
+        createdAt: job.updated_at,
+        resolvedAt: ""
+      });
+    }
+    for (const todo of todos) {
+      if (seenOrders.has(Number(todo.entity_id))) continue;
+      items.push({
+        id: todo.id,
+        type: "bobo_sync_failed",
+        entityType: "order",
+        entityId: Number(todo.entity_id),
+        detail: todo.detail,
+        status: "open",
+        createdAt: todo.created_at,
+        resolvedAt: todo.resolved_at
+      });
+    }
+    return items.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
   }
 
   async function handleApi(request, response, url) {
@@ -1146,6 +1204,7 @@ function createApplication(options = {}) {
 
     if (request.method === "GET" && url.pathname === "/api/admin/inquiries") {
       const view = url.searchParams.get("view") || "all";
+      const queue = String(url.searchParams.get("queue") || "");
       const search = String(url.searchParams.get("search") || "").trim().toLowerCase();
       let rows = db.prepare(`SELECT inquiries.*,
         (SELECT COUNT(*) FROM attachments WHERE attachments.inquiry_id = inquiries.id) AS attachment_count,
@@ -1154,12 +1213,14 @@ function createApplication(options = {}) {
       if (view === "active") rows = rows.filter((row) => !["ordered", "closed"].includes(row.status));
       if (view === "ordered") rows = rows.filter((row) => row.status === "ordered");
       if (view === "closed") rows = rows.filter((row) => row.status === "closed");
+      if (queue) rows = rows.filter((row) => inquiryMatchesQueue(row, queue));
       if (search) rows = rows.filter((row) => [row.inquiry_number, row.contact_name, row.phone, row.region, row.address, row.description].some((value) => String(value || "").toLowerCase().includes(search)));
       return sendJson(response, 200, rows.map((row) => ({ ...inquiryView(row), attachmentCount: Number(row.attachment_count), orderNumber: row.order_number || "", closedReason: row.closed_reason || "" })));
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/orders") {
-      const view = url.searchParams.get("view") || "all";
+      const view = url.searchParams.get("view") || "active";
+      const queue = String(url.searchParams.get("queue") || "");
       const search = String(url.searchParams.get("search") || "").trim().toLowerCase();
       const from = url.searchParams.get("from") || "";
       const to = url.searchParams.get("to") || "";
@@ -1170,14 +1231,23 @@ function createApplication(options = {}) {
         LEFT JOIN bobo_sync_jobs ON bobo_sync_jobs.order_id = orders.id ORDER BY orders.id DESC`).all();
       if (view === "active") rows = rows.filter((row) => row.status !== "completed");
       if (view === "completed") rows = rows.filter((row) => row.status === "completed");
-      if (search) rows = rows.filter((row) => [row.order_number, row.inquiry_number, row.contact_name, row.phone, row.region].some((value) => String(value || "").toLowerCase().includes(search)));
-      if (from) rows = rows.filter((row) => row.created_at.slice(0, 10) >= from);
-      if (to) rows = rows.filter((row) => row.created_at.slice(0, 10) <= to);
+      if (queue) rows = rows.filter((row) => orderMatchesQueue(row, queue));
+      if (search) rows = rows.filter((row) => {
+        const requirement = orderRequirement(row);
+        return [row.order_number, row.inquiry_number, row.contact_name, row.phone, row.region, requirement.description]
+          .some((value) => String(value || "").toLowerCase().includes(search));
+      });
+      const dateValue = (row) => shanghaiDate(view === "completed" ? row.completed_at || row.created_at : row.created_at);
+      if (from) rows = rows.filter((row) => dateValue(row) >= from);
+      if (to) rows = rows.filter((row) => dateValue(row) <= to);
       const processesForOrder = (orderId) => {
         const processes = db.prepare("SELECT name, status FROM public_processes WHERE order_id = ? ORDER BY sequence, process_id").all(orderId);
         return processes;
       };
-      return sendJson(response, 200, rows.map((row) => ({
+      return sendJson(response, 200, rows.map((row) => {
+        const requirement = orderRequirement(row);
+        const summary = paymentSummary(row.id);
+        return {
         id: row.id,
         orderNumber: row.order_number,
         inquiryNumber: row.inquiry_number,
@@ -1188,8 +1258,8 @@ function createApplication(options = {}) {
         status: row.status,
         statusText: ORDER_STATUS_TEXT[row.status] || "状态更新中",
         currentProcess: currentProcessLabel(row, processesForOrder(row.id)),
-        paymentStatus: paymentSummary(row.id).paymentStatus,
-        payment: paymentSummary(row.id),
+        paymentStatus: summary.paymentStatus,
+        payment: summary,
         boboSyncStatus: row.bobo_sync_status,
         boboOrderId: row.bobo_order_id,
         boboWorkOrderId: row.bobo_work_order_id,
@@ -1197,25 +1267,45 @@ function createApplication(options = {}) {
         boboSyncedAt: row.bobo_synced_at || "",
         paymentId: row.payment_id || null,
         receiptNumber: row.receipt_number || "",
-        createdAt: row.created_at
-      })));
+        createdAt: row.created_at,
+        completedAt: row.completed_at || "",
+        requirementSummary: String(requirement.description || "")
+      };
+      }));
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/dashboard") {
-      const inquiries = db.prepare("SELECT status, claimed_at FROM inquiries").all();
-      const orders = db.prepare("SELECT id, status, bobo_sync_status, created_at, completed_at FROM orders").all();
-      const payments = db.prepare("SELECT status FROM payments").all();
-      const today = now().toISOString().slice(0, 10);
+      const inquiries = db.prepare("SELECT id, inquiry_number, status, claimed_at, created_at FROM inquiries").all();
+      const orders = db.prepare("SELECT id, order_number, status, bobo_sync_status, created_at, completed_at FROM orders").all();
+      const payments = db.prepare("SELECT id, order_id, status, created_at FROM payments").all();
+      const boboTodos = boboExceptions();
+      const today = shanghaiDate(now());
+      const unclaimed = inquiries.filter((item) => inquiryMatchesQueue(item, "unclaimed"));
+      const awaitingCustomer = inquiries.filter((item) => inquiryMatchesQueue(item, "awaiting_customer"));
+      const awaitingPayment = orders.filter((item) => orderMatchesQueue(item, "awaiting_payment"));
+      const scheduleReady = orders.filter((item) => orderMatchesQueue(item, "schedule_ready"));
+      const balanceDue = orders.filter((item) => orderMatchesQueue(item, "balance_due"));
+      const readyDelivery = orders.filter((item) => orderMatchesQueue(item, "ready_delivery"));
+      const pendingPayments = payments.filter((item) => item.status === "pending");
+      const priorityTasks = [
+        ...boboTodos.map((item) => ({ type: "bobo_sync", priority: 1, title: "波波同步异常", reference: `订单 #${item.entityId}`, view: "todos", params: { type: "bobo_sync" }, entityType: "order", entityId: item.entityId })),
+        ...pendingPayments.map((item) => ({ type: "payment_review", priority: 2, title: "收款待核验", reference: `付款记录 #${item.id}`, view: "payments", params: { status: "pending" }, entityType: "payment", entityId: item.id })),
+        ...unclaimed.filter((item) => inquiryView(item).slaStatus === "overdue").map((item) => ({ type: "inquiry_overdue", priority: 3, title: "询价响应已逾期", reference: item.inquiry_number, view: "inquiries", params: { queue: "unclaimed" }, entityType: "inquiry", entityId: item.id })),
+        ...balanceDue.map((item) => ({ type: "balance_due", priority: 4, title: "订单尾款待收", reference: `订单 #${item.id}`, view: "orders", params: { queue: "balance_due" }, entityType: "order", entityId: item.id })),
+        ...scheduleReady.map((item) => ({ type: "schedule_ready", priority: 5, title: "定金已收待排产", reference: `订单 #${item.id}`, view: "orders", params: { queue: "schedule_ready" }, entityType: "order", entityId: item.id }))
+      ].sort((left, right) => left.priority - right.priority).slice(0, 8);
       const count = {
-        unclaimedInquiries: inquiries.filter((item) => !item.claimed_at && item.status !== "ordered" && item.status !== "closed").length,
-        quotedAwaitingCustomer: inquiries.filter((item) => item.status === "quoted").length,
-        ordersAwaitingPayment: orders.filter((item) => paymentSummary(item.id).verifiedAmount === 0).length,
-        paymentsAwaitingReview: payments.filter((item) => item.status === "pending").length,
-        depositReadyForScheduling: orders.filter((item) => { const summary = paymentSummary(item.id); return summary.mode === "deposit" && summary.verifiedAmount >= summary.startAmount && item.status === "awaiting_schedule"; }).length,
-        balancesOutstanding: orders.filter((item) => { const summary = paymentSummary(item.id); return summary.verifiedAmount >= summary.startAmount && summary.remainingAmount > 0; }).length,
-        boboSyncErrors: orders.filter((item) => item.bobo_sync_status === "retrying").length,
-        deliveringSoon: orders.filter((item) => item.status === "ready").length,
-        completedToday: orders.filter((item) => item.status === "completed" && String(item.completed_at || item.created_at).slice(0, 10) === today).length
+        unclaimedInquiries: unclaimed.length,
+        quotedAwaitingCustomer: awaitingCustomer.length,
+        ordersAwaitingPayment: awaitingPayment.length,
+        paymentsAwaitingReview: pendingPayments.length,
+        depositReadyForScheduling: scheduleReady.length,
+        balancesOutstanding: balanceDue.length,
+        balancesOutstandingAmount: balanceDue.reduce((sum, item) => sum + paymentSummary(item.id).remainingAmount, 0),
+        boboSyncErrors: boboTodos.length,
+        deliveringSoon: readyDelivery.length,
+        completedToday: orders.filter((item) => item.status === "completed" && shanghaiDate(item.completed_at || item.created_at) === today).length,
+        priorityTasks
       };
       return sendJson(response, 200, count);
     }
@@ -1236,14 +1326,61 @@ function createApplication(options = {}) {
       })));
     }
 
+    if (request.method === "GET" && url.pathname === "/api/admin/customers/detail") {
+      const phone = normalizePhone(url.searchParams.get("phone"));
+      if (!/^1\d{10}$/.test(phone)) return sendJson(response, 422, { message: "客户手机号无效" });
+      const inquiries = db.prepare("SELECT * FROM inquiries WHERE phone = ? ORDER BY id DESC").all(phone);
+      const orders = db.prepare("SELECT * FROM orders WHERE phone = ? ORDER BY id DESC").all(phone);
+      const customer = db.prepare("SELECT * FROM customers WHERE phone = ? ORDER BY id DESC LIMIT 1").get(phone);
+      if (!customer && !inquiries.length && !orders.length) return sendJson(response, 404, { message: "客户档案不存在" });
+      const activeOrders = orders.filter((item) => item.status !== "completed");
+      const historyOrders = orders.filter((item) => item.status === "completed");
+      const summaries = orders.map((item) => paymentSummary(item.id));
+      const latestInquiry = inquiries[0];
+      const latestRegion = inquiries.find((item) => item.region)?.region || "";
+      const latestAddress = inquiries.find((item) => item.address)?.address || orders.find((item) => item.address_snapshot)?.address_snapshot || "";
+      const paymentActivities = db.prepare("SELECT payments.created_at FROM payments JOIN orders ON orders.id = payments.order_id WHERE orders.phone = ?").all(phone).map((item) => item.created_at);
+      const activities = [customer?.created_at, ...inquiries.map((item) => item.created_at), ...orders.map((item) => item.created_at), ...paymentActivities].filter(Boolean).sort();
+      return sendJson(response, 200, {
+        customer: {
+          contactName: latestInquiry?.contact_name || orders[0]?.contact_name || customer?.contact_name || "未命名客户",
+          phone,
+          region: latestRegion,
+          address: latestAddress,
+          firstActivityAt: activities[0] || "",
+          lastActivityAt: activities.at(-1) || ""
+        },
+        summary: {
+          inquiryCount: inquiries.length,
+          activeOrderCount: activeOrders.length,
+          historyOrderCount: historyOrders.length,
+          verifiedAmount: summaries.reduce((sum, item) => sum + item.verifiedAmount, 0),
+          pendingAmount: summaries.reduce((sum, item) => sum + item.pendingAmount, 0),
+          remainingAmount: summaries.reduce((sum, item) => sum + item.remainingAmount, 0)
+        },
+        inquiries: inquiries.slice(0, 6).map((item) => ({ id: item.id, inquiryNumber: item.inquiry_number, createdAt: item.created_at, description: item.description, status: item.status })),
+        activeOrders: activeOrders.slice(0, 6).map((item) => ({ id: item.id, orderNumber: item.order_number, status: item.status, statusText: ORDER_STATUS_TEXT[item.status] || item.status, paymentStatus: paymentSummary(item.id).paymentStatus, currentProcess: currentProcessLabel(item, db.prepare("SELECT name, status FROM public_processes WHERE order_id = ? ORDER BY sequence, process_id").all(item.id)) })),
+        historyOrders: historyOrders.slice(0, 6).map((item) => ({ id: item.id, orderNumber: item.order_number, completedAt: item.completed_at || item.created_at, amount: Number(item.total_amount) })),
+        payment: {
+          verifiedAmount: summaries.reduce((sum, item) => sum + item.verifiedAmount, 0),
+          pendingAmount: summaries.reduce((sum, item) => sum + item.pendingAmount, 0),
+          remainingAmount: summaries.reduce((sum, item) => sum + item.remainingAmount, 0)
+        }
+      });
+    }
+
     if (request.method === "GET" && url.pathname === "/api/admin/notification-jobs") {
       const rows = db.prepare("SELECT id, customer_id, event_type, entity_type, entity_id, status, attempts, last_error, created_at, updated_at FROM notification_jobs ORDER BY id DESC").all();
       return sendJson(response, 200, rows.map((row) => ({ id: row.id, customerId: row.customer_id, eventType: row.event_type, entityType: row.entity_type, entityId: row.entity_id, status: row.status, attempts: row.attempts, lastError: row.last_error, createdAt: row.created_at, updatedAt: row.updated_at })));
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/todos") {
+      const type = String(url.searchParams.get("type") || "");
       const rows = db.prepare("SELECT id, type, entity_type, entity_id, detail, status, created_at, resolved_at FROM admin_todos WHERE status = 'open' ORDER BY id DESC").all();
-      return sendJson(response, 200, rows.map((row) => ({ id: row.id, type: row.type, entityType: row.entity_type, entityId: row.entity_id, detail: row.detail, status: row.status, createdAt: row.created_at, resolvedAt: row.resolved_at })));
+      const regular = rows.filter((row) => row.type !== "bobo_sync_failed").map((row) => ({ id: row.id, type: row.type, entityType: row.entity_type, entityId: row.entity_id, detail: row.detail, status: row.status, createdAt: row.created_at, resolvedAt: row.resolved_at }));
+      const bobo = boboExceptions();
+      const filtered = type === "bobo_sync" ? bobo : [...regular, ...bobo].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+      return sendJson(response, 200, filtered);
     }
 
     if (request.method === "GET" && url.pathname === "/api/admin/payments") {
@@ -1406,6 +1543,7 @@ function createApplication(options = {}) {
       if (input.specification !== undefined && (!input.specification || typeof input.specification !== "object" || Array.isArray(input.specification))) return sendJson(response, 422, { message: "报价规格格式错误" });
       if (input.specification && Object.hasOwn(input.specification, "quantity") && (!Number.isSafeInteger(Number(input.specification.quantity)) || Number(input.specification.quantity) <= 0)) return sendJson(response, 422, { message: "报价数量必须为正整数" });
       if (input.specification && Object.hasOwn(input.specification, "requirement") && !String(input.specification.requirement).trim()) return sendJson(response, 422, { message: "需求内容不能为空" });
+      if (input.specification && Object.hasOwn(input.specification, "process") && !String(input.specification.process).trim()) return sendJson(response, 422, { message: "请至少选择一个加工工序" });
       const specification = normalizeQuoteSpecification(input.specification, inquiry);
       const result = db.prepare("INSERT INTO quotes (inquiry_id, version, amount, valid_until, status, operator, payment_mode, start_amount, specification_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(inquiryId, version, Number(input.amount), input.validUntil, status, adminActor.name, paymentMode, startAmount, JSON.stringify(specification), now().toISOString());
