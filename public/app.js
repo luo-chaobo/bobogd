@@ -15,6 +15,9 @@ const NAV_GROUPS = [
   { label: "项目案例", href: "/cases.html", items: [
     ["电控柜", "/cases.html#control-cabinet"], ["设备罩壳", "/cases.html#machine-cover"],
     ["非标底座", "/cases.html#equipment-base"], ["金属周转箱", "/cases.html#turnover-bin"]
+  ] },
+  { label: "工厂实力", href: "/factory.html", items: [
+    ["数智化管理", "/digital-manufacturing.html"]
   ] }
 ].map((group) => ({ ...group, items: group.items.map(([label, href]) => ({ label, href })) }));
 
