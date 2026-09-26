@@ -8,15 +8,19 @@ page { background: #f3f6f8; color: #1e2d3b; font-size: 28rpx; }
 .brand-hero { position: relative; height: 640rpx; overflow: hidden; border-radius: 28rpx; background: #102635; color: #fff; }
 .brand-hero-image { position: absolute; top: 0; width: 1138rpx; height: 640rpx; left: -20rpx; }
 .brand-hero-shade { position: absolute; inset: 0; width: 100%; height: 100%; }
-.brand-hero-shade { background: linear-gradient(90deg, rgba(16,38,53,.96) 0%, rgba(16,38,53,.78) 52%, rgba(16,38,53,.18) 100%); }
+.brand-hero-shade { background: linear-gradient(35deg, rgba(10,31,45,.96) 0%, rgba(16,38,53,.78) 48%, rgba(16,38,53,.16) 100%); }
 .brand-hero-content { position: relative; z-index: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; padding: 32rpx 32rpx 28rpx; box-sizing: border-box; }
 .brand-hero-top, .brand-hero-copy { display: flex; flex-direction: column; align-items: flex-start; }
-.brand-hero-top { position: absolute; top: 40rpx; left: 10rpx; }
+.brand-hero-top { position: absolute; top: 88rpx; left: 10rpx; }
 .brand-hero-logo { width: 282rpx; height: 282rpx; }
 .brand-hero .title { max-width: 580rpx; font-size: 54rpx; line-height: 1.18; }
 .brand-hero .title text { display: block; }
 .brand-hero .subtitle { width: 100%; max-width: none; margin-top: 20rpx; color: #e3eaed; font-size: 24rpx; white-space: nowrap; }
-.hero-button { align-self: center; width: 100%; max-width: 360rpx; margin: 28rpx auto 0; box-sizing: border-box; background: #FF672B; color: #102635; }
+.hero-offer { display: flex; align-items: center; gap: 18rpx; margin-top: 26rpx; color: #fff; font-size: 30rpx; font-weight: 700; letter-spacing: 2rpx; text-shadow: 0 2rpx 10rpx rgba(0, 0, 0, .36); }
+.hero-offer-divider { width: 2rpx; height: 28rpx; background: rgba(255, 255, 255, .56); }
+.home-primary-action { margin-top: 18rpx; padding: 16rpx; border-radius: 20rpx; background: #fff; box-shadow: 0 8rpx 24rpx rgba(17, 41, 58, .09); }
+.hero-button { width: 100%; height: 96rpx; margin: 0; box-sizing: border-box; background: linear-gradient(135deg, #08746f, #0b9a91); color: #fff; font-size: 32rpx; font-weight: 700; line-height: 96rpx; box-shadow: 0 8rpx 20rpx rgba(11, 139, 134, .2); }
+.hero-button::after { border: 0; }
 .promise-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12rpx; margin: 24rpx 0; }
 .promise-grid > view { min-width: 0; padding: 24rpx 14rpx; border: 1rpx solid #dce3e6; border-radius: 18rpx; background: #fff; }
 .home-page .promise-grid { margin: 16rpx 0; }
@@ -100,6 +104,7 @@ page { background: #f3f6f8; color: #1e2d3b; font-size: 28rpx; }
 .filter-actions { margin-top: 4rpx; }
 .filter-button { flex: 1; min-width: 0; height: 88rpx; margin: 0; padding: 0 12rpx; font-size: 28rpx; line-height: 88rpx; }
 .order-number { font-weight: 600; }
+.order-card-main { display: block; }
 .order-summary { display: block; margin: 10rpx 0; color: #516170; line-height: 1.6; }
 .history-order-footer { justify-content: space-between; margin-top: 16rpx; }
 .repurchase-button { margin: 0; padding: 0 24rpx; border: 1rpx solid #0b8b86; border-radius: 999rpx; background: #fff; color: #08746f; font-size: 24rpx; line-height: 60rpx; }

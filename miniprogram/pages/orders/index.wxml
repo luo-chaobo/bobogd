@@ -20,13 +20,15 @@
     <view class="filter-actions"><button class="outline filter-button" bindtap="clearFilters">重置</button><button class="primary filter-button" bindtap="search">查询历史订单</button></view>
   </view>
   <view class="card" wx:if="{{items.length}}">
-    <view wx:for="{{items}}" wx:key="id" class="list-item" bindtap="detail" data-id="{{item.id}}">
-      <view class="row"><text class="order-number">{{item.orderNumber}}</text><text class="tag">{{item.statusText}}</text></view>
-      <text class="order-summary" wx:if="{{item.summary}}">{{item.summary}}</text>
-      <text class="muted" wx:if="{{scope === 'active'}}">点击查看公开进度</text>
-      <view class="history-order-footer" wx:else>
+    <view wx:for="{{items}}" wx:key="id" class="list-item">
+      <view class="order-card-main" bindtap="detail" data-id="{{item.id}}">
+        <view class="row"><text class="order-number">{{item.orderNumber}}</text><text class="tag">{{item.statusText}}</text></view>
+        <text class="order-summary" wx:if="{{item.summary}}">{{item.summary}}</text>
+        <text class="muted" wx:if="{{scope === 'active'}}">点击查看公开进度</text>
+      </view>
+      <view class="history-order-footer" wx:if="{{scope === 'history'}}">
         <text class="muted">完成日期：{{item.completedDate}}</text>
-        <button class="repurchase-button" catchtap="repurchase" data-id="{{item.id}}">再次购买</button>
+        <button class="repurchase-button" bindtap="repurchase" data-id="{{item.id}}">再次购买</button>
       </view>
     </view>
     <button class="outline" wx:if="{{items.length < total}}" loading="{{loading}}" bindtap="loadMore">加载更多</button>

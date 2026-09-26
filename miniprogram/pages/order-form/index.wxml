@@ -11,8 +11,6 @@
     <view class="field"><text class="label">加工需求</text><textarea data-field="description" value="{{form.description}}" bindinput="input" placeholder="材料、尺寸、用途、表面要求等"/></view>
     <view class="field"><text class="label">材料（选填）</text><input data-field="material" value="{{form.material}}" bindinput="input"/></view>
     <view class="field"><text class="label">尺寸（选填）</text><input data-field="dimensions" value="{{form.dimensions}}" bindinput="input"/></view>
-    <view class="field"><text class="label">加工工艺（选填）</text><input data-field="process" value="{{form.process}}" bindinput="input" placeholder="例如：激光切割、折弯、焊接"/></view>
-    <view class="field"><text class="label">技术要求（选填）</text><textarea data-field="technicalRequirements" value="{{form.technicalRequirements}}" bindinput="input" placeholder="公差、表面处理、去毛刺等"/></view>
     <view class="original-attachments" wx:if="{{sourceOrderId && originalAttachments.length}}">
       <view class="row reuse-row"><view><text class="label">沿用原订单图纸</text><text class="muted">共{{originalAttachments.length}}个附件，可关闭后重新上传</text></view><switch checked="{{reuseOriginalAttachments}}" color="#0b8b86" bindchange="reuseOriginalAttachments"/></view>
       <view wx:if="{{reuseOriginalAttachments}}"><view wx:for="{{originalAttachments}}" wx:key="id" class="list-item row"><text class="attachment-name">{{item.name}}</text><text class="muted">{{item.sizeText}}</text></view></view>

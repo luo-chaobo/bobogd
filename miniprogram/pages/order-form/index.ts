@@ -4,7 +4,7 @@ import { uploadAttachments } from "../../services/upload";
 import { bindCustomerPhone, isBoundCustomer } from "../../services/customer-auth";
 
 const app = getApp<any>();
-const blankForm = { drawingMode: "无图纸，按描述沟通", contactName: "", phone: "", region: "", address: "", quantity: 1, expectedDate: "", description: "", material: "", dimensions: "", process: "", technicalRequirements: "" };
+const blankForm = { drawingMode: "无图纸，按描述沟通", contactName: "", phone: "", region: "", address: "", quantity: 1, expectedDate: "", description: "", material: "", dimensions: "" };
 Page({
   data: { drawingModes: ["有图纸/模型", "有现场照片", "无图纸，按描述沟通"], form: { ...blankForm }, attachments: [], sourceOrderId: 0, sourceOrderNumber: "", originalAttachments: [], reuseOriginalAttachments: true, loadingDraft: false, isBound: false, error: "", submitting: false },
   async onLoad(options: any) {
@@ -14,13 +14,19 @@ Page({
       if (draft) this.setData({ ...draft, attachments: (draft.attachments || []).map((file: any) => ({ ...file, sizeText: formatFileSize(file.size) })) });
       return;
     }
+    await this.loadRepurchaseDraft(sourceOrderId);
+  },
+  async loadRepurchaseDraft(sourceOrderId: number) {
     this.setData({ sourceOrderId, loadingDraft: true });
     try {
       const draft = await app.globalData.api.getRepurchaseDraft(sourceOrderId, app.globalData.sessionToken);
       this.setData({
         form: draft.form,
         sourceOrderNumber: draft.orderNumber,
-        originalAttachments: draft.originalAttachments.map((file: any) => ({ ...file, sizeText: formatFileSize(file.size) }))
+        originalAttachments: draft.originalAttachments.map((file: any) => ({ ...file, sizeText: formatFileSize(file.size) })),
+        attachments: [],
+        reuseOriginalAttachments: true,
+        error: ""
       });
     } catch (error: any) { this.setData({ error: error.message || "复购资料加载失败" }); }
     finally { this.setData({ loadingDraft: false }); }
@@ -30,6 +36,10 @@ Page({
     const nextData: any = { isBound: isBoundCustomer(app) };
     if (user.phone) nextData["form.phone"] = user.phone;
     this.setData(nextData);
+    const sourceOrderId = Number(wx.getStorageSync("repurchaseSourceOrderId") || 0);
+    if (!sourceOrderId) return;
+    wx.removeStorageSync("repurchaseSourceOrderId");
+    this.loadRepurchaseDraft(sourceOrderId);
   },
   input(event: any) { const field = event.currentTarget.dataset.field; this.setData({ [`form.${field}`]: event.detail.value }); },
   drawingMode(event: any) { this.setData({ "form.drawingMode": this.data.drawingModes[event.detail.value] }); },

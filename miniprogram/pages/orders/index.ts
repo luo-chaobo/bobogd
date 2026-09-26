@@ -37,5 +37,16 @@ Page({
   clearFilters() { this.setData({ keyword: "", startDate: "", endDate: "" }, () => this.load(true)); },
   loadMore() { if (this.data.items.length < this.data.total) this.load(false); },
   detail(event: any) { wx.navigateTo({ url: `/pages/order-detail/index?id=${event.currentTarget.dataset.id}` }); },
-  repurchase(event: any) { wx.navigateTo({ url: `/pages/order-form/index?sourceOrderId=${event.currentTarget.dataset.id}` }); }
+  repurchase(event: any) {
+    const orderId = Number(event.currentTarget.dataset.id);
+    if (!orderId) return wx.showToast({ title: "订单信息无效，请刷新后重试", icon: "none" });
+    wx.setStorageSync("repurchaseSourceOrderId", orderId);
+    wx.switchTab({
+      url: "/pages/order-form/index",
+      fail: () => {
+        wx.removeStorageSync("repurchaseSourceOrderId");
+        wx.showToast({ title: "复购页面打开失败，请稍后重试", icon: "none" });
+      }
+    });
+  }
 });

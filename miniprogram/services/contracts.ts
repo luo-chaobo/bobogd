@@ -78,8 +78,8 @@ export function buildInquiryPayload(input: InquiryDraft) {
     description: String(input.description || "").trim(),
     material: String(input.material || "").trim(),
     dimensions: String(input.dimensions || "").trim(),
-    process: String(input.process || "").trim(),
-    technicalRequirements: String(input.technicalRequirements || "").trim(),
+    process: "",
+    technicalRequirements: "",
     attachments: input.attachments || []
   };
 }

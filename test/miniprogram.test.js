@@ -28,7 +28,7 @@ test("rejects a submitted inquiry draft without contact details", () => {
   });
 });
 
-test("builds an image-free inquiry payload without inventing attachment data", () => {
+test("omits customer-entered process fields from an inquiry payload", () => {
   const payload = buildInquiryPayload({
     drawingMode: "none",
     contactName: "王先生",
@@ -40,8 +40,8 @@ test("builds an image-free inquiry payload without inventing attachment data", (
     description: "按现场尺寸做设备防护罩",
     material: "304不锈钢",
     dimensions: "800×500×300mm",
-    process: "",
-    technicalRequirements: "",
+    process: "激光切割、折弯",
+    technicalRequirements: "去毛刺",
     attachments: []
   });
 
@@ -291,10 +291,18 @@ test("renders active and historical orders with filters and repurchase controls"
   assert.match(ordersPage, /历史订单/);
   assert.match(ordersPage, /mode="date"/);
   assert.match(ordersPage, /再次购买/);
+  assert.match(ordersPage, /class="order-card-main"[^>]*bindtap="detail"/);
+  assert.match(ordersPage, /bindtap="repurchase"/);
+  assert.doesNotMatch(ordersPage, /catchtap="repurchase"/);
   assert.match(ordersLogic, /getOrders\(/);
   assert.match(ordersLogic, /repurchase/);
+  assert.match(ordersLogic, /setStorageSync\("repurchaseSourceOrderId"/);
+  assert.match(ordersLogic, /switchTab\(/);
+  assert.doesNotMatch(ordersLogic, /navigateTo\(\{\s*url: `\/pages\/order-form/);
   assert.match(formLogic, /getRepurchaseDraft/);
   assert.match(formLogic, /repurchaseOrder/);
+  assert.match(formLogic, /getStorageSync\("repurchaseSourceOrderId"\)/);
+  assert.match(formLogic, /removeStorageSync\("repurchaseSourceOrderId"\)/);
   assert.match(formPage, /沿用原订单图纸/);
 });
 
@@ -318,7 +326,7 @@ test("presents the approved brand and laser-cutting hero on the mini-program hom
   const app = JSON.parse(fs.readFileSync(path.join(miniDir, "app.json"), "utf8"));
   assert.equal(app.window.navigationBarTitleText, "未来机械钣金服务");
   assert.match(home, /assets\/brand\/wl-mark-transparent\.png/);
-  assert.match(home, /assets\/images\/laser-cutting-hero\.jpg/);
+  assert.match(home, /assets\/images\/laser-cutting-hero-enhanced\.jpg/);
   assert.match(home, /无图可沟通/);
   assert.match(home, /小批量可接/);
   const homeLogic = fs.readFileSync(path.join(miniDir, "pages/home/index.ts"), "utf8");
