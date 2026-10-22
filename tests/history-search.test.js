@@ -32,7 +32,7 @@ function seedDatabase() {
       ],
       workOrders: [
         { id: "w1", workNo: "AA-20260725", orderId: "o1", productName: "YYYYYYY", planQty: 10, status: "生产中", currentProcess: "激光", createdAt: "2026-07-25T08:00:00.000Z" },
-        { id: "w2", workNo: "BB-20260701", orderId: "o2", productName: "旧产品", planQty: 5, status: "已完成", currentProcess: "激光", createdAt: "2026-07-01T08:00:00.000Z" }
+        { id: "w2", workNo: "BB-20260701", orderId: "o2", productName: "旧产品", planQty: 5, status: "已完成", currentProcess: "激光", createdAt: "2026-07-01T08:00:00.000Z", completedAt: "2026-10-21T23:56:00.000Z" }
       ],
       routes: [
         { id: "r1", workOrderId: "w1", processId: "laser", processName: "激光", sequence: 1, status: "进行中", planQty: 10, completedQty: 0 },
@@ -84,6 +84,14 @@ async function run() {
   assert.strictEqual(workOrders.data.items[0].customerName, "海天");
 
   const exceptions = await request("/api/history/exceptions?customerId=c1&processName=激光&from=2026-07-20&to=2026-07-31");
+  const completedOnShanghai22 = await request("/api/history/work-orders?dateType=completedAt&from=2026-10-22&to=2026-10-22");
+  assert.strictEqual(completedOnShanghai22.status, 200);
+  assert.deepStrictEqual(completedOnShanghai22.data.items.map((item) => item.workNo), ["BB-20260701"]);
+
+  const notCompletedOnShanghai21 = await request("/api/history/work-orders?dateType=completedAt&from=2026-10-21&to=2026-10-21");
+  assert.strictEqual(notCompletedOnShanghai21.status, 200);
+  assert.deepStrictEqual(notCompletedOnShanghai21.data.items, []);
+
   assert.strictEqual(exceptions.status, 200);
   assert.deepStrictEqual(exceptions.data.items.map((item) => item.id), ["e1"]);
   assert.strictEqual(exceptions.data.items[0].workNo, "AA-20260725");

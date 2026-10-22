@@ -1081,7 +1081,8 @@ function validTvDrawingViewer(db, token) {
 }
 
 function isDateInRange(value, from, to) {
-  const dateText = String(value || "").slice(0, 10);
+  const text = String(value || "").trim();
+  const dateText = /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : shanghaiDateKey(text);
   if (!dateText) return false;
   if (from && dateText < from) return false;
   if (to && dateText > to) return false;
@@ -1778,7 +1779,7 @@ function enrich(db) {
   });
   const cutoff = today(-29);
   const completionSourceSummary = workOrders
-    .filter((workOrder) => workOrder.status === "已完成" && String(workOrder.completedAt || "").slice(0, 10) >= cutoff)
+    .filter((workOrder) => workOrder.status === "已完成" && shanghaiDateKey(workOrder.completedAt) >= cutoff)
     .reduce((summary, workOrder) => {
       const origin = workOrder.order?.orderOrigin === "platform" ? "platform" : "factory";
       const channel = origin === "platform" ? workOrder.order?.sourceChannel : "factory_manual";

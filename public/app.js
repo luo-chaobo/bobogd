@@ -542,8 +542,10 @@ function workOrderDrawings(data, workOrder) {
 }
 
 function isoDate(offsetDays = 0) {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
+  const today = shanghaiDateKey(new Date());
+  if (!today) return "";
+  const [year, month, day] = today.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + offsetDays));
   return date.toISOString().slice(0, 10);
 }
 
@@ -584,7 +586,11 @@ function dashboard(data) {
   const overdue = workOrders.filter((w) => w.overdue).length;
   const openExceptions = data.exceptions.filter((e) => e.status !== "已解决").length;
   const active = workOrders.filter((w) => w.status !== "已完成").length;
-  const finished = workOrders.filter((w) => w.status === "已完成" && String(w.completedAt || "").slice(0, 10) >= state.dashboardFinishedFrom && String(w.completedAt || "").slice(0, 10) <= state.dashboardFinishedTo).length;
+  const finished = workOrders.filter((w) => {
+    if (w.status !== "已完成") return false;
+    const completedDate = shanghaiDateKey(w.completedAt);
+    return completedDate && completedDate >= state.dashboardFinishedFrom && completedDate <= state.dashboardFinishedTo;
+  }).length;
   const dispatchBoardButton = data.permissions?.viewBoardCustomer
     ? '<button class="btn secondary" data-action="openDispatchBoard">派工看板</button>'
     : "";
