@@ -7,9 +7,24 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
+const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 const secret = "webhook-test-secret";
+
+test("full snapshot does not mark a partially reported route completed", () => {
+  const source = fs.readFileSync(path.join(root, "server.js"), "utf8");
+  const queue = source.slice(source.indexOf("function queuePlatformProgress("), source.indexOf("function queuePlatformShipment("));
+  const quantity = source.slice(source.indexOf("function routeQuantityComplete("), source.indexOf("function routeHasOpenIssue("));
+  const context = vm.createContext({ normalizedOrderSource: order => order });
+  vm.runInContext(quantity + queue, context);
+  const db = { orders: [{ id: "o", orderOrigin: "platform", externalOrderNumber: "WL-PARTIAL" }], workOrders: [{ id: "w", orderId: "o" }],
+    routes: [{ id: "r", workOrderId: "w", processName: "焊接", sequence: 3, status: "已完成", planQty: 2, completedQty: 1, completedAt: "2026-10-01" }], platformWebhookEvents: [] };
+  context.queuePlatformProgress(db, db.routes[0], "partial", "2026-10-01");
+  assert.equal(db.platformWebhookEvents[0].event.processes[0].status, "待开始");
+  assert.equal(db.platformWebhookEvents[0].event.processes[0].completedAt, "");
+  assert.equal(db.platformWebhookEvents[0].event.allProcessesCompleted, false);
+});
 
 async function freePort() {
   const probe = net.createServer();
@@ -61,6 +76,7 @@ test("platform report persists a signed, retryable public progress event", async
     for (const name of ["data", "lib", "public"]) fs.mkdirSync(path.join(directory, name), { recursive: true });
     fs.copyFileSync(path.join(root, "server.js"), path.join(directory, "server.js"));
     fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(directory, "lib", "weapp-image.js"));
+    fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(directory, "lib", "order-financials.js"));
     fs.writeFileSync(path.join(directory, "public", "index.html"), "test");
     fs.writeFileSync(dbPath, JSON.stringify({
       users: [
@@ -101,6 +117,7 @@ test("platform report persists a signed, retryable public progress event", async
     assert.deepEqual({ externalOrderNumber: event.externalOrderNumber, workOrderId: event.workOrderId, type: event.type, sequence: event.sequence }, { externalOrderNumber: "WL-TEST-1", workOrderId: "work", type: "process.updated", sequence: 1 });
     assert.deepEqual({ id: event.process.id, name: event.process.name, status: event.process.status }, { id: "route", name: "激光", status: "已完成" });
     assert.equal(event.allProcessesCompleted, true);
+    assert.deepEqual(event.processes, [{ id: "route", sequence: 1, name: "激光", status: "已完成", completedAt: event.process.completedAt }]);
     assert.equal(first.body.includes("工人"), false);
     const signed = crypto.createHmac("sha256", secret).update(`${first.headers["x-integration-timestamp"]}.${first.headers["x-integration-nonce"]}.${first.body}`).digest("hex");
     assert.equal(first.headers["x-integration-signature"], signed);
@@ -152,6 +169,14 @@ test("platform report persists a signed, retryable public progress event", async
     });
     assert.equal(duplicateFulfillmentResponse.status, 200);
     assert.equal(readDb().platformWebhookEvents.length, 3, "repeating shipped updates must not create duplicate events");
+    const sync = (userId) => fetch(`${baseUrl}/api/platform-orders/sync-processes`, {
+      method: "POST", headers: { "content-type": "application/json", "x-user-id": userId },
+      body: JSON.stringify({ orderNumber: "WL-TEST-1", requestId: "repair-1" })
+    });
+    assert.equal((await sync("worker")).status, 403);
+    assert.equal((await sync("vip")).status, 200);
+    assert.equal((await sync("vip")).status, 200);
+    assert.equal(readDb().platformWebhookEvents.length, 4);
   } finally {
     await stop();
     await new Promise((resolve) => receiver.close(resolve));

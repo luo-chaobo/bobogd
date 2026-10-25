@@ -49,6 +49,18 @@ test("后台订单只区分工厂单和平台单", () => {
   assert.match(app.productionSourceBadge(miniprogramWorkOrder), /平台单/);
 });
 
+test("有金额查看权限且订单已设置单价时来源标签变绿", () => {
+  const app = loadApp();
+  const data = {
+    workOrders: [{ ...factoryWorkOrder, order: { unitPrice: 12.5 } }],
+    permissions: { viewOrderFinancials: true },
+  };
+
+  assert.match(app.workOrderTable(data), /class="tag priced">工厂单<\/span>/);
+  assert.doesNotMatch(app.workOrderTable({ ...data, permissions: { viewOrderFinancials: false } }), /class="tag priced">工厂单<\/span>/);
+  assert.doesNotMatch(app.workOrderTable({ ...data, workOrders: [factoryWorkOrder] }), /class="tag priced">工厂单<\/span>/);
+});
+
 test("订单工单侧栏和生产总览提供三种来源视图", () => {
   const app = loadApp();
   const data = {

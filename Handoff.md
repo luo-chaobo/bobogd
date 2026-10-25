@@ -1,5 +1,14 @@
 # 项目交接
 
+## 2026-10-01 当日工作区更新（优先于下方历史状态）
+
+- 当前实际工作树D:/WMR/lcb/未来网站改造/bobo-platform-delivery-worktree，feature/platform-delivery，基于HEAD9c28aea；有用户未提交文件及miniprogram子仓修改，不再采用本文件历史“不是Git仓库”的判断。不替代生产发布主仓或生产0.4.0基线。
+- 本地实现统一看板口径、15秒缓存/分批/图纸懒加载/token复用/加载占位，来源按钮/完工详情/图纸入口恢复、PDF全局/AMD兼容、配送按钮防溢出。
+- 本地新增建单和报工完整工序回传，未满额不标完成；POST /api/platform-orders/sync-processes为主管以上的指定平台订单补同步，orderNumber/requestId去重、持久化重试。客户平台以实际工序sequence替换报价路线。
+- 文档同步复测：node --test tests/platform-progress-webhook.test.js tests/pdf-worker-initialization.test.js为3项通过，node tests/platform-order-integration.test.js通过。此前全量80通过/1启动失败且单独通过，仅为此前结果，本轮未重跑全量。
+- 用户截图证明部分旧逻辑在线显示，完整路线新版、PDF微信最终打开、性能收益和小程序正式发布均未验证。本轮仅同步文档，未生产写入、提交或推送。
+- 技术说明../website/docs/complete-process-sync.md；Obsidian今日记录2026-10-01-看板优化与完整工序同步。上线先客户接收端后BOBO发送端，再获授权补同步；不得上传本地数据库或附件。下方旧阻塞只作为历史待复核。
+
 更新时间：2026-09-19（Asia/Shanghai）
 
 ## 当前任务

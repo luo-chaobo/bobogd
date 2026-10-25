@@ -4,6 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { weappImageType } = require("./lib/weapp-image");
+const { normalizeUnitPrice, calculateOrderTotal, identifyFinancialAccessUsers, financialAccessUserIds, createSerialQueue, hasOrderNumberConflict, normalizeOrderNumber } = require("./lib/order-financials");
 
 const LOCAL_CONFIG_FILE = path.join(__dirname, "config.local.json");
 if (fs.existsSync(LOCAL_CONFIG_FILE)) {
@@ -54,10 +55,13 @@ const AUDIT_RETENTION_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 const TV_VIEW_TOKEN_SECRET = String(process.env.TV_VIEW_TOKEN_SECRET || WX_APP_SECRET).trim()
   || crypto.randomBytes(32).toString("hex");
 const TV_VIEW_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+const TV_DASHBOARD_CACHE_TTL_MS = 15 * 1000;
 let wechatAccessTokenCache = { value: "", expiresAt: 0 };
 let wechatAccessTokenPromise = null;
 const weappCodePromises = new Map();
 let mysqlPool = null;
+let tvDatabaseCache = { value: null, expiresAt: 0 };
+const tvDashboardCache = new Map();
 const defaultSettings = {
   tvCarouselEnabled: true,
   tvCarouselSeconds: 120,
@@ -451,7 +455,10 @@ async function ensureDb() {
   await writeDb({ users, deletedUsers: [], processes, customers, orders, workOrders, routes, reports: [], exceptions, attachments: [], drawings: [], auditLogs: [], platformWebhookEvents: [], settings: { ...defaultSettings } });
 }
 
-async function readDb() {
+async function readDb(maxAgeMs = 0) {
+  if (maxAgeMs > 0 && tvDatabaseCache.value && tvDatabaseCache.expiresAt > Date.now()) {
+    return tvDatabaseCache.value;
+  }
   let db;
   if (DB_DRIVER === "mysql") {
     const pool = createMysqlPool();
@@ -478,6 +485,10 @@ async function readDb() {
   db.deliveries ||= [];
   db.processes ||= [];
   db.settings ||= {};
+  if (!db.orderFinancialAccessUserIds || typeof db.orderFinancialAccessUserIds !== "object" || Array.isArray(db.orderFinancialAccessUserIds)) {
+    db.orderFinancialAccessUserIds = identifyFinancialAccessUsers(db.users);
+    changed = true;
+  }
   db.customers.forEach((customer) => {
     if (customer.active === undefined) {
       customer.active = true;
@@ -676,6 +687,7 @@ async function readDb() {
   db.processes.sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "zh-Hans-CN"));
   if (processOrderBeforeSort !== db.processes.map((process) => process.id).join(",")) changed = true;
   if (changed) await writeDb(db);
+  if (maxAgeMs > 0) tvDatabaseCache = { value: db, expiresAt: Date.now() + maxAgeMs };
   return db;
 }
 
@@ -833,6 +845,8 @@ function makeQrSvg(text) {
 }
 
 async function writeDb(db) {
+  tvDatabaseCache = { value: null, expiresAt: 0 };
+  tvDashboardCache.clear();
   if (DB_DRIVER === "mysql") {
     const pool = createMysqlPool();
     await pool.execute(
@@ -919,6 +933,15 @@ function serializePlatformOrder(task) {
   return result;
 }
 
+const serializeOrderNumberWrite = createSerialQueue();
+const ORDER_NUMBER_WRITE_PATHS = new Set(["/api/orders", "/api/orders/update", "/api/orders/repeat", "/api/external/work-orders"]);
+const serializeDispatchBoardWrite = createSerialQueue();
+const DISPATCH_BOARD_WRITE_PATHS = new Set([
+  "/api/dispatch-board/route-toggle",
+  "/api/dispatch-board/route-schedule",
+  "/api/dispatch-board/order-due-date",
+]);
+
 function queuePlatformProgress(db, route, reportId, occurredAt) {
   const workOrder = db.workOrders.find((item) => item.id === route.workOrderId);
   const order = db.orders.find((item) => item.id === workOrder?.orderId);
@@ -936,6 +959,9 @@ function queuePlatformProgress(db, route, reportId, occurredAt) {
       eventId, sequence: order.platformWebhookSequence, workOrderId: workOrder.id,
       externalOrderNumber: source.externalOrderNumber, type: "process.updated", occurredAt,
       allProcessesCompleted,
+      processes: routes.map(item => ({ id: item.id, sequence: Number(item.sequence), name: item.processName,
+        status: item.status === "已完成" && routeQuantityComplete(item) ? "已完成" : "待开始",
+        completedAt: item.status === "已完成" && routeQuantityComplete(item) ? item.completedAt || "" : "" })),
       process: { id: route.id, sequence: Number(route.sequence), name: route.processName, status: route.status, startedAt: route.startedAt || route.lastReportedAt || "", completedAt: route.completedAt || "" }
     }
   });
@@ -1041,9 +1067,20 @@ async function backfillPlatformOrder(orderNumber) {
   if (db.platformWebhookEvents.length !== before) await writeDb(db);
 }
 
-function send(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(data));
+function send(res, status, data, headers = {}) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", ...headers });
+  res.end(JSON.stringify(res.viewOrderFinancials ? data : redactOrderFinancials(data)));
+}
+
+function redactOrderFinancials(value) {
+  if (Array.isArray(value)) return value.map(redactOrderFinancials);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "unitPrice" || key === "totalAmount") continue;
+    result[key] = redactOrderFinancials(item);
+  }
+  return result;
 }
 
 function sendLocalFile(res, filePath, contentType, downloadName = "") {
@@ -1844,7 +1881,19 @@ function canViewRestrictedBoard(user) {
   return Boolean(user && user.active && RESTRICTED_VIEW_PHONES.has(phone));
 }
 
-function userPermissions(user) {
+let financialAccessWarning = "";
+
+function userPermissions(user, users = [], financialUserIds = {}) {
+  const activeUsers = users.filter((item) => item && item.active !== false);
+  const issues = ["罗朝波", "郑金波", "郑学良"]
+    .map((name) => ({ name, count: activeUsers.filter((item) => item.name === name).length }))
+    .filter((item) => item.count !== 1)
+    .map((item) => `${item.name}:${item.count}`)
+    .join(",");
+  if (issues && issues !== financialAccessWarning) {
+    console.warn(`[order-financials] financial access disabled for ambiguous/missing accounts: ${issues}`);
+    financialAccessWarning = issues;
+  }
   return {
     forceDeleteWorkOrders: canForceDeleteWorkOrders(user),
     editOrders: canSupervise(user),
@@ -1855,6 +1904,7 @@ function userPermissions(user) {
     manageCustomerFeedback: canViewRestrictedBoard(user),
     manageOrderFulfillment: canViewRestrictedBoard(user),
     manageDeliveries: canDrive(user),
+    viewOrderFinancials: financialAccessUserIds(users, financialUserIds).has(String(user?.id || "")),
   };
 }
 
@@ -2096,7 +2146,7 @@ function tvDrawingMeta(drawing) {
   };
 }
 
-function buildTvDashboard(db, showCustomer = false, includeDrawings = false, source = "all") {
+function buildTvDashboard(db, showCustomer = false, source = "all") {
   const data = enrich(db);
   const orders = visibleProductionWorkOrders(data.workOrders, source).map((wo) => {
     const openQualityExceptions = db.exceptions.filter((item) => item.workOrderId === wo.id && item.status !== "已解决" && (item.qualityRouteId || item.source === "quality-inspection"));
@@ -2110,7 +2160,7 @@ function buildTvDashboard(db, showCustomer = false, includeDrawings = false, sou
     const { drawings, ...safeWorkOrder } = wo;
     return {
       ...safeWorkOrder,
-      ...(includeDrawings ? { drawings: drawings.map(tvDrawingMeta) } : {}),
+      drawingCount: drawings.length,
       customer,
       ...dueInfo(wo.order),
       isRush: wo.order?.priority === "急单",
@@ -2178,8 +2228,12 @@ function buildTvDashboard(db, showCustomer = false, includeDrawings = false, sou
 async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   let db;
+  let dbReadMs = 0;
   try {
-    db = await readDb();
+    const cacheableTvRequest = req.method === "GET" && ["/api/tv-viewer-token", "/api/tv-dashboard"].includes(url.pathname);
+    const dbReadStartedAt = Date.now();
+    db = await readDb(cacheableTvRequest ? TV_DASHBOARD_CACHE_TTL_MS : 0);
+    dbReadMs = Date.now() - dbReadStartedAt;
   } catch (error) {
     console.error(error);
     return send(res, 500, { error: "数据存储不可用" });
@@ -2217,7 +2271,7 @@ async function handleApi(req, res) {
         currentDb.integrationNonces = currentDb.integrationNonces.filter((item) => Date.parse(item.createdAt) >= cutoff);
         if (currentDb.integrationNonces.some((item) => item.nonce === nonce)) return { status: 401, data: { error: "集成请求已重放" } };
         currentDb.integrationNonces.push({ nonce, createdAt: new Date().toISOString() });
-        const existing = currentDb.orders.find((item) => item.externalOrderNumber === input.externalOrderNumber || item.orderNo === input.externalOrderNumber);
+        const existing = currentDb.orders.find((item) => item.externalOrderNumber === input.externalOrderNumber || normalizeOrderNumber(item.orderNo) === normalizeOrderNumber(input.externalOrderNumber));
         if (existing) {
           if (!externalOrderMatches(existing, input)) return { status: 409, data: { error: "外部订单号已存在且内容不一致" }, save: true, db: currentDb };
           const workOrder = currentDb.workOrders.find((item) => item.orderId === existing.id);
@@ -2255,7 +2309,7 @@ async function handleApi(req, res) {
           roleNames: getUserRoles(user).map((role) => roles[role]),
           viewBoardCustomer: canViewRestrictedBoard(user),
         },
-        permissions: userPermissions(user),
+        permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds),
       });
     }
 
@@ -2279,7 +2333,31 @@ async function handleApi(req, res) {
     if (req.method === "GET" && url.pathname === "/api/tv-dashboard") {
       const viewer = tvViewerFromToken(db, url.searchParams.get("viewerToken"));
       const source = ["factory", "platform"].includes(url.searchParams.get("source")) ? url.searchParams.get("source") : "all";
-      return send(res, 200, buildTvDashboard(db, canViewRestrictedBoard(viewer), Boolean(viewer), source));
+      const audience = !viewer ? "anonymous" : canViewRestrictedBoard(viewer) ? "restricted" : "authenticated";
+      const cacheKey = `${source}:${audience}`;
+      const cached = tvDashboardCache.get(cacheKey);
+      const cacheHit = Boolean(cached && cached.expiresAt > Date.now());
+      const dashboard = cacheHit ? cached.value : buildTvDashboard(db, canViewRestrictedBoard(viewer), source);
+      if (!cacheHit) tvDashboardCache.set(cacheKey, { value: dashboard, expiresAt: Date.now() + TV_DASHBOARD_CACHE_TTL_MS });
+      const total = dashboard.activeOrders.length;
+      const requestedLimit = Number(url.searchParams.get("limit"));
+      const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+      const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(24, requestedLimit) : total;
+      return send(res, 200, {
+        ...dashboard,
+        activeOrderTotal: total,
+        activeOrders: dashboard.activeOrders.slice(offset, offset + limit),
+      }, { "X-TV-Cache": cacheHit ? "HIT" : "MISS" });
+    }
+
+    const tvOrderDrawingsMatch = url.pathname.match(/^\/api\/tv-orders\/([^/]+)\/drawings$/);
+    if (req.method === "GET" && tvOrderDrawingsMatch) {
+      const viewer = validTvDrawingViewer(db, url.searchParams.get("viewerToken"));
+      if (!viewer) return send(res, 401, { error: "看板身份已失效，请重新打开" });
+      const workOrderId = decodeURIComponent(tvOrderDrawingsMatch[1]);
+      const workOrder = visibleProductionWorkOrders(enrich(db).workOrders).find((item) => item.id === workOrderId);
+      if (!workOrder) return send(res, 404, { error: "工单不存在" });
+      return send(res, 200, { items: (workOrder.drawings || []).map(tvDrawingMeta) });
     }
 
     const tvDrawingFileMatch = url.pathname.match(/^\/api\/tv-drawings\/([^/]+)\/(file|preview-file)$/);
@@ -2352,6 +2430,59 @@ async function handleApi(req, res) {
       });
       await writeDb(db);
       return send(res, 200, { ok: true, route });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/dispatch-board/route-schedule") {
+      const authorization = String(req.headers.authorization || "");
+      const viewer = viewerFromToken(db, authorization.startsWith("Bearer ") ? authorization.slice(7) : "");
+      if (!viewer) return send(res, 401, { error: "派工看板身份已失效，请重新打开" });
+      if (viewer.audience !== "dispatch-board" || !canViewRestrictedBoard(viewer.user)) {
+        return send(res, 403, { error: "无权操作派工看板" });
+      }
+      const body = await parseBody(req);
+      const route = db.routes.find((item) => item.id === body.routeId);
+      if (!route) return send(res, 404, { error: "工序不存在" });
+      if (route.status === "已完成") return send(res, 400, { error: "已完成工序不能修改排期" });
+      const before = {
+        plannedStartDate: route.plannedStartDate || "",
+        plannedEndDate: route.plannedEndDate || "",
+      };
+      if (before.plannedStartDate !== String(body.expectedStartDate || "") || before.plannedEndDate !== String(body.expectedEndDate || "")) {
+        return send(res, 409, { error: "工序排期已被修改，请刷新后重试" });
+      }
+      const schedule = normalizeRouteSchedule(body.plannedStartDate, body.plannedEndDate);
+      if (schedule.error) return send(res, 400, { error: schedule.error });
+      route.plannedStartDate = schedule.plannedStartDate;
+      route.plannedEndDate = schedule.plannedEndDate;
+      appendAudit(db, viewer.user, "dispatch-board-route-schedule", "route", route.id, {
+        before,
+        after: { plannedStartDate: route.plannedStartDate, plannedEndDate: route.plannedEndDate },
+      });
+      await writeDb(db);
+      return send(res, 200, { ok: true, route });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/dispatch-board/order-due-date") {
+      const authorization = String(req.headers.authorization || "");
+      const viewer = viewerFromToken(db, authorization.startsWith("Bearer ") ? authorization.slice(7) : "");
+      if (!viewer) return send(res, 401, { error: "派工看板身份已失效，请重新打开" });
+      if (viewer.audience !== "dispatch-board" || !canViewRestrictedBoard(viewer.user)) {
+        return send(res, 403, { error: "无权操作派工看板" });
+      }
+      const body = await parseBody(req);
+      const order = db.orders.find((item) => item.id === body.orderId);
+      if (!order) return send(res, 404, { error: "订单不存在" });
+      const beforeDueDate = String(order.dueDate || "");
+      if (beforeDueDate !== String(body.expectedDueDate || "")) return send(res, 409, { error: "订单交期已被修改，请刷新后重试" });
+      const dueDate = normalizeDate(body.dueDate);
+      if (!dueDate) return send(res, 400, { error: "交期格式请填写 YYYY/MM/DD" });
+      order.dueDate = dueDate;
+      appendAudit(db, viewer.user, "dispatch-board-order-due-date", "order", order.id, {
+        beforeDueDate,
+        afterDueDate: dueDate,
+      });
+      await writeDb(db);
+      return send(res, 200, { ok: true, order });
     }
 
     const qrRouteMatch = url.pathname.match(/^\/api\/qr\/route\/([^/]+)\.svg$/);
@@ -2428,6 +2559,7 @@ async function handleApi(req, res) {
 
     const user = currentUser(req, db);
     if (!user) return send(res, 401, { error: "请先登录" });
+    res.viewOrderFinancials = financialAccessUserIds(db.users, db.orderFinancialAccessUserIds).has(String(user.id));
 
     if (req.method === "GET" && url.pathname === "/api/deliveries/available") {
       if (!canDrive(user)) return send(res, 403, { error: "无权查看配送任务" });
@@ -2491,7 +2623,9 @@ async function handleApi(req, res) {
         await writeDb(currentDb);
         return { status: 201, data: { trip, delivery: deliveries[0], deliveries } };
       });
-      if (result.status === 201) setTimeout(() => void processPlatformWebhooks(), 50);
+      if (result.status === 201) {
+        setTimeout(() => void processPlatformWebhooks(), 50);
+      }
       return send(res, result.status, result.data);
     }
 
@@ -2593,7 +2727,9 @@ async function handleApi(req, res) {
         return send(res, 400, { error: error.message });
       }
       try {
-        const workbook = await buildManagementWorkbook(buildManagementReportData(db, from, to));
+        const workbook = await buildManagementWorkbook(buildManagementReportData(db, from, to), {
+          includeFinancials: userPermissions(user, db.users, db.orderFinancialAccessUserIds).viewOrderFinancials,
+        });
         const filename = `波波工单报工管理分析_${from}_${to}.xlsx`;
         res.writeHead(200, {
           "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2620,7 +2756,7 @@ async function handleApi(req, res) {
           viewBoardCustomer: canViewRestrictedBoard(user),
         },
         roles,
-        permissions: userPermissions(user),
+        permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds),
       });
     }
     if (req.method === "POST" && url.pathname === "/api/logout") {
@@ -2633,7 +2769,7 @@ async function handleApi(req, res) {
       delete data.auditLogs;
       if (!canViewRestrictedBoard(user)) delete data.customerFeedbacks;
       data.customers = db.customers.filter((customer) => customer.active !== false);
-      return send(res, 200, { ...data, roles, permissions: userPermissions(user) });
+      return send(res, 200, { ...data, roles, permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds) });
     }
 
     if (req.method === "GET" && url.pathname === "/api/mobile/completions") {
@@ -2642,7 +2778,7 @@ async function handleApi(req, res) {
       const result = mobileCompletionData(db, period, includeItems);
       if (!result) return send(res, 400, { error: "完工统计时间范围不正确" });
       if (includeItems && !canViewRestrictedBoard(user)) return send(res, 403, { error: "无权查看完工详情" });
-      if (includeItems) result.canManageOrderFulfillment = userPermissions(user).manageOrderFulfillment;
+      if (includeItems) result.canManageOrderFulfillment = userPermissions(user, db.users, db.orderFinancialAccessUserIds).manageOrderFulfillment;
       return send(res, 200, result);
     }
 
@@ -2729,6 +2865,25 @@ async function handleApi(req, res) {
       return send(res, 200, { ok: true, item });
     }
 
+    if (req.method === "POST" && url.pathname === "/api/platform-orders/sync-processes") {
+      if (!canSupervise(user)) return send(res, 403, { error: "无权同步平台工序" });
+      const body = await parseBody(req);
+      if (!String(body.orderNumber || "").trim() || !/^[a-zA-Z0-9_-]{1,80}$/.test(String(body.requestId || ""))) return send(res, 400, { error: "请提供订单号及同步请求标识" });
+      const result = await serializePlatformOrder(async () => {
+        const currentDb = await readDb();
+        const order = currentDb.orders.find(item => normalizedOrderSource(item).externalOrderNumber === body.orderNumber);
+        const workOrder = currentDb.workOrders.find(item => item.orderId === order?.id && item.creationStatus !== "pending");
+        const route = currentDb.routes.find(item => item.workOrderId === workOrder?.id);
+        if (!order || !route) return { status: 404, data: { error: "未找到已建立工序的平台订单" } };
+        queuePlatformProgress(currentDb, route, `sync-${order.id}-${body.requestId}`, new Date().toISOString());
+        appendAudit(currentDb, user, "platform-process-sync", "order", order.id, { requestId: body.requestId });
+        await writeDb(currentDb);
+        return { status: 200, data: { ok: true, platformSync: "queued" } };
+      });
+      if (result.status === 200) setTimeout(() => void processPlatformWebhooks(), 50);
+      return send(res, result.status, result.data);
+    }
+
     if (req.method === "POST" && url.pathname === "/api/platform-orders/confirm") {
       if (!canSupervise(user)) return send(res, 403, { error: "无权确认平台订单" });
       const body = await parseBody(req);
@@ -2774,6 +2929,7 @@ async function handleApi(req, res) {
         workOrder.confirmedAt = createdAt;
         workOrder.confirmedBy = user.id;
         syncWorkOrder(currentDb, workOrder.id);
+        queuePlatformProgress(currentDb, routes[0], `plan-${workOrder.id}`, createdAt);
         appendAudit(currentDb, user, "platform-order-confirm", "order", order.id, { workOrderId: workOrder.id, processNames: routes.map((route) => route.processName) });
         await writeDb(currentDb);
         return { status: 200, data: { ok: true, order, workOrder, routes } };
@@ -2829,15 +2985,50 @@ async function handleApi(req, res) {
       const active = workOrders.filter((w) => w.status !== "已完成").length;
       const finished = workOrders.filter((w) => w.status === "已完成").length;
       const processLoad = buildProcessLoad(db, dashboardProcessNames(db, source), source);
-      return send(res, 200, { active, finished, overdue, openExceptions, processLoad, workOrders });
+      return send(res, 200, { active, finished, overdue, openExceptions, processLoad, workOrders, permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds) });
     }
 
     if (req.method === "GET" && url.pathname === "/api/my-tasks") {
-      const data = enrich(db);
+      const workOrdersById = new Map(db.workOrders.map((workOrder) => [workOrder.id, workOrder]));
+      const ordersById = new Map(db.orders.map((order) => [order.id, order]));
+      const workOrderIdsWithDrawings = new Set();
+      const orderIdsWithDrawings = new Set();
+      db.drawings.forEach((drawing) => {
+        if (drawing.removedAt) return;
+        if (drawing.workOrderId) workOrderIdsWithDrawings.add(drawing.workOrderId);
+        if (drawing.orderId) orderIdsWithDrawings.add(drawing.orderId);
+      });
       const tasks = db.routes
         .filter((route) => route.status !== "已完成" && canOperateRoute(user, route).ok)
-        .map((r) => ({ ...enrichRoute(db, r), workOrder: data.workOrders.find((w) => w.id === r.workOrderId) }));
+        .map((route) => {
+          const workOrder = workOrdersById.get(route.workOrderId) || {};
+          const order = ordersById.get(workOrder.orderId) || {};
+          return {
+            ...enrichRoute(db, route),
+            workOrder: {
+              workNo: workOrder.workNo || "",
+              productName: workOrder.productName || "",
+              order: { quantityUnit: order.quantityUnit },
+              hasDrawings: workOrderIdsWithDrawings.has(workOrder.id) || orderIdsWithDrawings.has(order.id),
+            },
+          };
+        });
       return send(res, 200, { tasks });
+    }
+
+    const routeDrawingsMatch = req.method === "GET" && url.pathname.match(/^\/api\/routes\/([^/]+)\/drawings$/);
+    if (routeDrawingsMatch) {
+      const routeId = decodeURIComponent(routeDrawingsMatch[1]);
+      const route = db.routes.find((item) => item.id === routeId);
+      if (!route) return send(res, 404, { error: "工序不存在" });
+      const permission = canOperateRoute(user, route);
+      if (!permission.ok) return send(res, 403, { error: permission.error });
+      const workOrder = db.workOrders.find((item) => item.id === route.workOrderId);
+      if (!workOrder) return send(res, 404, { error: "工单不存在" });
+      const items = db.drawings.filter((item) =>
+        !item.removedAt && (item.workOrderId === workOrder.id || item.orderId === workOrder.orderId)
+      );
+      return send(res, 200, { items });
     }
 
     if (req.method === "POST" && url.pathname === "/api/customers") {
@@ -2990,7 +3181,7 @@ async function handleApi(req, res) {
       const weight = normalizeWeightKg(body.weightKg);
       if (!orderNo) return send(res, 400, { error: "新订单号必填" });
       if (orderNo === sourceOrder.orderNo) return send(res, 409, { error: "新订单号不能与原订单号相同" });
-      if (db.orders.some((item) => item.orderNo === orderNo)) return send(res, 409, { error: "订单号已存在" });
+      if (hasOrderNumberConflict(db.orders, orderNo)) return send(res, 409, { error: "订单号已存在" });
       if (!Number.isInteger(quantity) || quantity < 1) return send(res, 400, { error: "数量必须为大于 0 的整数" });
       if (!dueDate) return send(res, 400, { error: "交期格式请填写 YYYY/MM/DD" });
       if (!["普通", "急单"].includes(priority)) return send(res, 400, { error: "优先级不正确" });
@@ -3097,6 +3288,10 @@ async function handleApi(req, res) {
     if (req.method === "POST" && url.pathname === "/api/orders/update") {
       if (!canSupervise(user)) return send(res, 403, { error: "无权编辑订单" });
       const body = await parseBody(req);
+      const canEditFinancials = res.viewOrderFinancials;
+      if (!canEditFinancials && (Object.hasOwn(body, "unitPrice") || Object.hasOwn(body, "totalAmount"))) {
+        return send(res, 403, { error: "无权编辑订单金额" });
+      }
       const order = db.orders.find((item) => item.id === body.orderId);
       if (!order) return send(res, 404, { error: "订单不存在" });
       const orderNo = String(body.orderNo || "").trim();
@@ -3113,7 +3308,14 @@ async function handleApi(req, res) {
       if (!orderNo || !customer || !productName || !dueDate) return send(res, 400, { error: "订单号、客户、产品和交期必填" });
       if (weight.error) return send(res, 400, { error: weight.error });
       if (!Number.isInteger(quantity) || quantity < 1) return send(res, 400, { error: "数量必须为大于 0 的整数" });
-      if (db.orders.some((item) => item.id !== order.id && item.orderNo === orderNo)) return send(res, 400, { error: "订单号已存在" });
+      const orderNoChanged = normalizeOrderNumber(orderNo) !== normalizeOrderNumber(order.orderNo);
+      if (orderNoChanged && hasOrderNumberConflict(db.orders, orderNo, order.id)) return send(res, 400, { error: "订单号已存在" });
+      const priceResult = canEditFinancials && Object.hasOwn(body, "unitPrice")
+        ? normalizeUnitPrice(body.unitPrice)
+        : { value: order.unitPrice ?? null, error: "" };
+      if (priceResult.error) return send(res, 400, { error: priceResult.error });
+      const totalAmount = calculateOrderTotal(priceResult.value, quantity);
+      if (priceResult.value !== null && totalAmount === null) return send(res, 400, { error: "订单总金额超出可处理范围" });
 
       const before = {
         orderNo: order.orderNo,
@@ -3128,11 +3330,14 @@ async function handleApi(req, res) {
         note: order.note,
       };
       const oldOrderNo = order.orderNo;
+      const savedOrderNo = orderNoChanged ? orderNo : order.orderNo;
       Object.assign(order, {
-        orderNo,
+        orderNo: savedOrderNo,
         customerId: customer.id,
         productName,
         quantity,
+        unitPrice: priceResult.value,
+        totalAmount,
         quantityUnit,
         drawingNo: String(body.drawingNo || "").trim(),
         weightKg: weight.value,
@@ -3144,7 +3349,7 @@ async function handleApi(req, res) {
       });
       const linkedWorkOrders = db.workOrders.filter((item) => item.orderId === order.id);
       linkedWorkOrders.forEach((workOrder) => {
-        if (workOrder.workNo === oldOrderNo) workOrder.workNo = orderNo;
+        if (workOrder.workNo === oldOrderNo) workOrder.workNo = savedOrderNo;
         workOrder.productName = productName;
         workOrder.planQty = quantity;
       });
@@ -3172,7 +3377,7 @@ async function handleApi(req, res) {
       });
       appendAudit(db, user, "order-update", "order", order.id, {
         before,
-        after: { orderNo, customerId: customer.id, productName, quantity, quantityUnit, drawingNo: order.drawingNo, weightKg: order.weightKg, dueDate, priority: order.priority, note: order.note },
+        after: { orderNo: savedOrderNo, customerId: customer.id, productName, quantity, quantityUnit, drawingNo: order.drawingNo, weightKg: order.weightKg, dueDate, priority: order.priority, note: order.note },
         addedDrawings,
         removedDrawings,
       });
@@ -3183,12 +3388,19 @@ async function handleApi(req, res) {
     if (req.method === "POST" && url.pathname === "/api/orders") {
       if (!canManage(user.role)) return send(res, 403, { error: "无权创建订单" });
       const body = await parseBody(req);
+      const canEditFinancials = res.viewOrderFinancials;
+      if (!canEditFinancials && (Object.hasOwn(body, "unitPrice") || Object.hasOwn(body, "totalAmount"))) {
+        return send(res, 403, { error: "无权填写订单金额" });
+      }
+      const priceResult = canEditFinancials ? normalizeUnitPrice(body.unitPrice) : { value: null, error: "" };
+      if (priceResult.error) return send(res, 400, { error: priceResult.error });
       const orderNo = String(body.orderNo || "").trim();
       const productName = String(body.productName || "").trim();
       const weight = normalizeWeightKg(body.weightKg);
       if (!isValidQuantityUnit(body.quantityUnit)) return send(res, 400, { error: "数量单位仅支持件或套" });
       const quantityUnit = normalizeQuantityUnit(body.quantityUnit);
       if (!orderNo || !body.customerId || !productName || !body.quantity || !body.dueDate) return send(res, 400, { error: "订单号、客户、产品、数量和交期必填" });
+      if (hasOrderNumberConflict(db.orders, orderNo)) return send(res, 400, { error: "订单号已存在" });
       if (weight.error) return send(res, 400, { error: weight.error });
       if (!db.customers.some((customer) => customer.id === body.customerId && customer.active !== false)) return send(res, 400, { error: "客户不存在或已停用" });
       const dueDate = normalizeDate(body.dueDate);
@@ -3207,7 +3419,10 @@ async function handleApi(req, res) {
       const orderId = id("o");
       const workOrderId = id("w");
       const createdAt = new Date().toISOString();
-      const order = { id: orderId, orderNo, customerId: body.customerId, productName, drawingNo: body.drawingNo || "", weightKg: weight.value, quantity: Number(body.quantity), quantityUnit, dueDate, priority: body.priority || "普通", status: "未开始", note: body.note || "", createdAt, orderOrigin: "factory", sourceChannel: "factory_manual", externalOrderNumber: "" };
+      const quantity = Number(body.quantity);
+      const totalAmount = calculateOrderTotal(priceResult.value, quantity);
+      if (priceResult.value !== null && totalAmount === null) return send(res, 400, { error: "订单总金额超出可处理范围" });
+      const order = { id: orderId, orderNo, customerId: body.customerId, productName, drawingNo: body.drawingNo || "", weightKg: weight.value, quantity, unitPrice: priceResult.value, totalAmount, quantityUnit, dueDate, priority: body.priority || "普通", status: "未开始", note: body.note || "", createdAt, orderOrigin: "factory", sourceChannel: "factory_manual", externalOrderNumber: "" };
       const workOrder = { id: workOrderId, workNo: String(body.workNo || orderNo).trim(), orderId, productName, planQty: Number(body.quantity), status: "未开始", creationStatus: "confirmed", currentProcess: "", assigneeId: user.id, qrToken: id("qr"), createdAt };
       db.orders.push(order);
       db.workOrders.push(workOrder);
@@ -3384,8 +3599,12 @@ async function handleApi(req, res) {
       appendAudit(db, user, "route-status", "route", route.id, {
         beforeStatus, afterStatus: route.status, planQty: Number(route.planQty || 0), completedQty: Number(route.completedQty || 0),
       });
+      const dbWriteStartedAt = Date.now();
       await writeDb(db);
-      return send(res, 200, { ok: true, route });
+      const dbWriteMs = Date.now() - dbWriteStartedAt;
+      return send(res, 200, { ok: true, route }, {
+        "Server-Timing": `db-read;dur=${dbReadMs}, db-write;dur=${dbWriteMs}`,
+      });
     }
 
     if (req.method === "POST" && url.pathname === "/api/report") {
@@ -3727,7 +3946,16 @@ function serveStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-  if (req.url.startsWith("/api/")) return handleApi(req, res);
+  if (req.url.startsWith("/api/")) {
+    const pathname = new URL(req.url, "http://localhost").pathname;
+    if (req.method === "POST" && ORDER_NUMBER_WRITE_PATHS.has(pathname)) {
+      return serializeOrderNumberWrite(() => handleApi(req, res));
+    }
+    if (req.method === "POST" && DISPATCH_BOARD_WRITE_PATHS.has(pathname)) {
+      return serializeDispatchBoardWrite(() => handleApi(req, res));
+    }
+    return handleApi(req, res);
+  }
   serveStatic(req, res);
 });
 

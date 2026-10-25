@@ -13,6 +13,7 @@ test("backfills an existing platform report once without another shop-floor repo
     for (const name of ["data", "lib", "public"]) fs.mkdirSync(path.join(directory, name), { recursive: true });
     fs.copyFileSync(path.join(root, "server.js"), path.join(directory, "server.js"));
     fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(directory, "lib", "weapp-image.js"));
+    fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(directory, "lib", "order-financials.js"));
     fs.writeFileSync(dbPath, JSON.stringify({
       users: [], deletedUsers: [], processes: [{ id: "laser", name: "激光", active: true }],
       customers: [{ id: "customer", name: "客户", active: true }],

@@ -14,6 +14,7 @@ function seedDatabase() {
   fs.mkdirSync(path.join(tempRoot, "public", "uploads"), { recursive: true });
   fs.copyFileSync(path.join(root, "server.js"), path.join(tempRoot, "server.js"));
   fs.mkdirSync(path.join(tempRoot, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(tempRoot, "lib", "order-financials.js"));
   fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(tempRoot, "lib", "weapp-image.js"));
   fs.writeFileSync(path.join(tempRoot, "public", "index.html"), "test", "utf8");
   fs.writeFileSync(
@@ -83,7 +84,6 @@ async function run() {
   assert.deepStrictEqual(workOrders.data.items.map((item) => item.workNo), ["AA-20260725"]);
   assert.strictEqual(workOrders.data.items[0].customerName, "海天");
 
-  const exceptions = await request("/api/history/exceptions?customerId=c1&processName=激光&from=2026-07-20&to=2026-07-31");
   const completedOnShanghai22 = await request("/api/history/work-orders?dateType=completedAt&from=2026-10-22&to=2026-10-22");
   assert.strictEqual(completedOnShanghai22.status, 200);
   assert.deepStrictEqual(completedOnShanghai22.data.items.map((item) => item.workNo), ["BB-20260701"]);
@@ -92,6 +92,7 @@ async function run() {
   assert.strictEqual(notCompletedOnShanghai21.status, 200);
   assert.deepStrictEqual(notCompletedOnShanghai21.data.items, []);
 
+  const exceptions = await request("/api/history/exceptions?customerId=c1&processName=激光&from=2026-07-20&to=2026-07-31");
   assert.strictEqual(exceptions.status, 200);
   assert.deepStrictEqual(exceptions.data.items.map((item) => item.id), ["e1"]);
   assert.strictEqual(exceptions.data.items[0].workNo, "AA-20260725");

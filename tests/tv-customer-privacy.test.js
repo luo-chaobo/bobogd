@@ -13,6 +13,7 @@ function seedDatabase() {
   fs.mkdirSync(path.join(tempRoot, "data"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "public"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(tempRoot, "lib", "order-financials.js"));
   fs.copyFileSync(path.join(root, "server.js"), path.join(tempRoot, "server.js"));
   fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(tempRoot, "lib", "weapp-image.js"));
   fs.writeFileSync(path.join(tempRoot, "public", "index.html"), "test", "utf8");
@@ -122,10 +123,12 @@ async function run() {
   const web = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
   const tv = fs.readFileSync(path.join(root, "public", "tv.js"), "utf8");
   const miniTv = fs.readFileSync(path.join(root, "miniprogram", "pages", "tv", "tv.js"), "utf8");
+  const miniTvToken = fs.readFileSync(path.join(root, "miniprogram", "utils", "tv-token.js"), "utf8");
   const miniBoard = fs.readFileSync(path.join(root, "miniprogram", "pages", "board", "board.wxml"), "utf8");
   assert.ok(web.includes("/api/tv-viewer-token"));
   assert.ok(tv.includes("viewerToken"));
-  assert.ok(miniTv.includes("/api/tv-viewer-token"));
+  assert.ok(miniTv.includes("prepareTvViewerToken"));
+  assert.ok(miniTvToken.includes("/api/tv-viewer-token"));
   assert.ok(miniBoard.includes("viewBoardCustomer"));
   console.log("tv-customer-privacy: ok");
 }

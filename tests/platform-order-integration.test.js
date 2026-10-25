@@ -27,6 +27,7 @@ function seedDatabase() {
   fs.mkdirSync(path.join(tempRoot, "data"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "public"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(tempRoot, "lib", "order-financials.js"));
   fs.copyFileSync(path.join(root, "server.js"), path.join(tempRoot, "server.js"));
   fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(tempRoot, "lib", "weapp-image.js"));
   fs.writeFileSync(path.join(tempRoot, "public", "index.html"), "test", "utf8");
@@ -129,6 +130,9 @@ async function run() {
   assert.strictEqual(confirmed.status, 200);
   assert.strictEqual(confirmed.data.workOrder.creationStatus, "confirmed");
   assert.strictEqual(confirmed.data.routes.length, 1);
+  const planEvents = JSON.parse(fs.readFileSync(path.join(tempRoot, "data", "db.json"), "utf8")).platformWebhookEvents;
+  const planEvent = planEvents.find(item => item.event.externalOrderNumber === body.externalOrderNumber).event;
+  assert.deepStrictEqual(planEvent.processes.map(item => [item.name, item.status, item.sequence]), [["激光", "待开始", 1]]);
   assert.deepStrictEqual(
     { productName: confirmed.data.order.productName, quantity: confirmed.data.order.quantity, dueDate: confirmed.data.order.dueDate, priority: confirmed.data.order.priority, region: confirmed.data.order.region, deliveryAddress: confirmed.data.order.deliveryAddress, planQty: confirmed.data.workOrder.planQty },
     { productName: "304 壳体", quantity: 6, dueDate: "2026-10-15", priority: "急单", region: "浙江省 宁波市", deliveryAddress: "更新后的地址", planQty: 6 }

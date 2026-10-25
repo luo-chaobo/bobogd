@@ -25,6 +25,7 @@ function seed() {
   fs.mkdirSync(path.join(tempRoot, "data"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "public"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(tempRoot, "lib", "order-financials.js"));
   fs.copyFileSync(path.join(root, "server.js"), path.join(tempRoot, "server.js"));
   fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(tempRoot, "lib", "weapp-image.js"));
   fs.writeFileSync(path.join(tempRoot, "public", "index.html"), "test");
@@ -94,10 +95,11 @@ async function run() {
 
   const db = JSON.parse(fs.readFileSync(path.join(tempRoot, "data", "db.json"), "utf8"));
   assert.ok(db.orders.find((order) => order.id === "platform-ready").shippedAt);
-  assert.strictEqual(db.platformWebhookEvents.filter((item) => item.event.type === "shipment.shipped").length, 1);
+  assert.strictEqual(db.platformWebhookEvents.filter((item) => item.event.type === "shipment.shipped" && item.event.externalOrderNumber === "P-READY").length, 1);
   assert.strictEqual(db.platformWebhookEvents.filter((item) => item.event.type === "delivery.completed").length, 1);
   assert.strictEqual(db.deliveries.find((delivery) => delivery.orderId === "platform-legacy").status, "legacy_shipped");
   assert.ok(db.auditLogs.some((item) => item.action === "delivery-complete"));
+
   console.log("delivery-flow: ok");
 }
 

@@ -13,6 +13,7 @@ function seedDatabase() {
   fs.mkdirSync(path.join(tempRoot, "data"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "public"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(tempRoot, "lib", "order-financials.js"));
   fs.copyFileSync(path.join(root, "server.js"), path.join(tempRoot, "server.js"));
   fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(tempRoot, "lib", "weapp-image.js"));
   fs.writeFileSync(path.join(tempRoot, "public", "index.html"), "test", "utf8");
@@ -20,7 +21,7 @@ function seedDatabase() {
     users: [{ id: "worker", name: "worker", phone: "1", role: "admin", roles: ["admin"], password: "1", active: true }],
     processes: [],
     customers: [{ id: "customer", name: "customer" }],
-    orders: [{ id: "order", orderNo: "O-1", customerId: "customer", productName: "product", quantity: 10, dueDate: "2099-01-01", status: "生产中" }],
+    orders: [{ id: "order", orderNo: "O-1", customerId: "customer", productName: "product", quantity: 10, quantityUnit: "套", dueDate: "2099-01-01", status: "生产中" }],
     workOrders: [{ id: "work", workNo: "W-1", orderId: "order", productName: "product", planQty: 10, status: "生产中", currentProcess: "设计" }],
     routes: [
       { id: "route-design", workOrderId: "work", processName: "设计", sequence: 1, assignedRole: "worker", status: "进行中", planQty: 10, completedQty: 0 },
@@ -59,9 +60,20 @@ async function run() {
   assert.strictEqual(response.status, 200);
   assert.strictEqual(data.tasks.length, 2);
   data.tasks.forEach((task) => {
-    assert.deepStrictEqual(task.workOrder.drawings.map((item) => item.id), ["drawing-image", "drawing-cad"]);
-    assert.strictEqual(task.workOrder.drawings[1].previewUrl, "/uploads/previews/part.svg");
+    assert.strictEqual(task.workOrder.hasDrawings, true);
+    assert.strictEqual(task.workOrder.workNo, "W-1");
+    assert.strictEqual(task.workOrder.productName, "product");
+    assert.strictEqual(task.workOrder.order.quantityUnit, "套");
+    assert.ok(!Object.hasOwn(task.workOrder, "routes"));
+    assert.ok(!Object.hasOwn(task.workOrder, "drawings"));
+    assert.ok(!Object.hasOwn(task.workOrder, "customer"));
   });
+  const drawingsResponse = await fetch(`http://127.0.0.1:${port}/api/routes/route-design/drawings`, {
+    headers: { "x-user-id": "worker" }
+  });
+  const drawingsData = await drawingsResponse.json();
+  assert.strictEqual(drawingsResponse.status, 200);
+  assert.deepStrictEqual(drawingsData.items.map((item) => item.id), ["drawing-image", "drawing-cad"]);
 
   const boardJs = fs.readFileSync(path.join(root, "miniprogram", "pages", "board", "board.js"), "utf8");
   const boardWxml = fs.readFileSync(path.join(root, "miniprogram", "pages", "board", "board.wxml"), "utf8");
@@ -75,7 +87,13 @@ async function run() {
   assert.ok(!boardWxml.includes("drawing-actions"), "生产看板卡片不能显示图纸预览/下载操作区");
   assert.ok(!boardJs.includes("confirmDownload"), "生产看板不能保留下载确认逻辑");
   assert.ok(taskJs.includes("previewDrawing"), "我的任务需要支持图纸预览");
+  const setStatusStart = taskJs.indexOf("async setStatus(e) {");
+  const setStatusEnd = taskJs.indexOf("updateTaskStatus(route)", setStatusStart);
+  assert.ok(setStatusStart >= 0 && setStatusEnd > setStatusStart, "工序状态更新处理器应存在");
+  assert.ok(!taskJs.slice(setStatusStart, setStatusEnd).includes("this.load"), "状态更新不能重新加载整批任务");
   assert.ok(drawingsJs.includes("/api/drawings/preview"), "附件清单 CAD 图纸需要支持按需生成预览");
+  assert.ok(drawingsJs.includes("/api/routes/"), "附件清单应按工序单独加载图纸");
+  assert.ok(taskWxml.includes("wx:if=\"{{item.workOrder.hasDrawings}}\""), "有图纸时任务卡应显示预览入口");
   assert.ok(taskWxml.includes("drawing-preview-icon"), "任务卡右上角需要显示预览小图标");
   assert.ok(taskWxml.includes("bindtap=\"previewDrawing\""), "预览小图标必须绑定预览动作");
   assert.ok(!taskWxml.includes("downloadDrawing") && !taskWxml.includes("confirmDownload"), "我的任务本次只增加预览入口，不增加下载入口");

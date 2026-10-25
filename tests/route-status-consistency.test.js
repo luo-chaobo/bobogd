@@ -13,6 +13,7 @@ function seedDatabase() {
   fs.mkdirSync(path.join(tempRoot, "data"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "public"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(tempRoot, "lib", "order-financials.js"));
   fs.copyFileSync(path.join(root, "server.js"), path.join(tempRoot, "server.js"));
   fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(tempRoot, "lib", "weapp-image.js"));
   const stateModule = path.join(root, "lib", "work-order-state.js");
@@ -41,7 +42,7 @@ async function request(urlPath, body) {
     headers: { "content-type": "application/json", "x-user-id": "manager" },
     body: JSON.stringify(body)
   });
-  return { status: response.status, data: await response.json() };
+  return { status: response.status, headers: response.headers, data: await response.json() };
 }
 
 async function waitForServer() {
@@ -73,6 +74,7 @@ async function run() {
 
   const abnormalOverride = await request("/api/route-status", { routeId: "override", status: "异常" });
   assert.strictEqual(abnormalOverride.status, 200);
+  assert.match(abnormalOverride.headers.get("server-timing") || "", /^db-read;dur=\d+(\.\d+)?, db-write;dur=\d+(\.\d+)?$/);
 
   const resolved = await request("/api/exceptions/resolve", { id: "exception", status: "已解决", solution: "已处理" });
   assert.strictEqual(resolved.status, 200);

@@ -1,4 +1,5 @@
 const tvRoot = document.getElementById("tv");
+const TV_ORDER_BATCH_SIZE = 12;
 const tvState = {
   data: null,
   screenPage: 0,
@@ -7,6 +8,7 @@ const tvState = {
   routeOffsets: {},
   routeDirections: {},
   drawingPreview: null,
+  loadGeneration: 0,
 };
 let screenTimer = null;
 let processTimer = null;
@@ -15,6 +17,9 @@ let screenTimerKey = "";
 let processTimerKey = "";
 let routeTimerKey = "";
 let pdfJsPromise = null;
+let loadInFlight = false;
+const dispatchClickTimers = new WeakMap();
+let queuedLoadResolvers = [];
 
 function isMobileTv() {
   const params = new URLSearchParams(window.location.search);
@@ -153,17 +158,18 @@ function orderRow(order, mobileMode = false) {
       (nodeClass === "" && ["待开始", "暂停"].includes(route.status)) ||
       (nodeClass === "active" && route.status === "进行中")
     );
+    const scheduleEditable = isDispatchBoard() && route.status !== "已完成";
     return `
       <div class="route-node ${nodeClass} ${route.lastReportScheduleStatus || ""}${dispatchClickable ? " dispatch-clickable" : ""}"${dispatchClickable ? ` data-route-id="${esc(route.id)}" data-route-status="${esc(route.status)}"` : ""}>
-        <div class="circle${planClass}">${esc(planText)}</div>
+        <div class="circle${planClass}${scheduleEditable ? " dispatch-schedule" : ""}"${scheduleEditable ? ` data-dispatch-schedule data-route-id="${esc(route.id)}" data-route-name="${esc(route.processName)}" data-route-start="${esc(route.plannedStartDate || "")}" data-route-end="${esc(route.plannedEndDate || "")}" data-work-no="${esc(order.workNo)}"` : ""}>${esc(planText)}</div>
         <div class="route-name">${esc(route.processName)}</div>
         <div class="route-report"><span class="route-time">${route.lastReportTime ? shortDay(route.lastReportTime) : "--"}</span><span class="route-worker">${esc(route.reporterName || "")}</span></div>
       </div>
     `;
   }).join("");
-  const drawings = mobileMode && Array.isArray(order.drawings) ? order.drawings : [];
-  const drawingSlot = drawings.length
-    ? `<button class="order-drawing-button" type="button" data-drawing-order-id="${esc(order.id)}" aria-label="查看${drawings.length}份图纸"><span class="drawing-icon">图</span><span class="drawing-count">${drawings.length > 99 ? "99+" : drawings.length}</span></button>`
+  const drawingCount = mobileMode ? Number(order.drawingCount ?? order.drawings?.length ?? 0) : 0;
+  const drawingSlot = drawingCount > 0
+    ? `<button class="order-drawing-button" type="button" data-drawing-order-id="${esc(order.id)}" aria-label="查看${drawingCount}份图纸"><span class="drawing-icon">图</span><span class="drawing-count">${drawingCount > 99 ? "99+" : drawingCount}</span></button>`
     : '<span class="order-drawing-placeholder" aria-hidden="true"></span>';
   return `
     <div class="order-row ${order.dueLevel || ""}">
@@ -180,7 +186,7 @@ function orderRow(order, mobileMode = false) {
       <div class="routes${routeCarousel ? " route-carousel" : ""}" data-route-key="${esc(routeCarouselKey(order))}"${routeCarousel ? ` data-route-max="${carousel.maxOffset}"` : ""}>
         ${routeCarousel ? `<div class="route-track">${routeNodes}</div>` : routeNodes}
       </div>
-      <div class="due-cell ${order.dueLevel || "normal"}">交期 ${esc(dueShort(order))}</div>
+      <div class="due-cell ${order.dueLevel || "normal"}${isDispatchBoard() ? " dispatch-due-date" : ""}"${isDispatchBoard() ? ` data-dispatch-due-date data-order-id="${esc(order.order?.id || order.orderId || "")}" data-order-no="${esc(order.workNo)}" data-due-date="${esc(order.order?.dueDate || "")}"` : ""}>交期 ${esc(dueShort(order))}</div>
     </div>
   `;
 }
@@ -206,28 +212,68 @@ function nativePdfPreviewUrl(preview) {
   return `${url.split("#")[0]}#page=1&zoom=page-fit&view=Fit&pagemode=none&navpanes=0`;
 }
 
-function loadPdfJs() {
-  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
-  if (pdfJsPromise) return pdfJsPromise;
-  pdfJsPromise = new Promise((resolve, reject) => {
+function loadPdfScript(url) {
+  return new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "/vendor/pdfjs/pdf.min.js";
-    script.onload = () => {
-      if (!window.pdfjsLib) {
-        reject(new Error("PDF预览组件加载失败"));
-        return;
-      }
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js";
-      resolve(window.pdfjsLib);
+    script.src = url;
+    script.onload = resolve;
+    script.onerror = () => {
+      script.remove();
+      reject(new Error("PDF预览组件加载失败，请检查网络或静态资源"));
     };
-    script.onerror = () => reject(new Error("PDF预览组件加载失败，请检查静态资源是否已上传"));
     document.head.appendChild(script);
-  }).catch((error) => {
+  });
+}
+
+async function loadPdfWorker() {
+  const originalDefine = globalThis.define;
+  let workerDefine = null;
+  let initializationError = null;
+  if (typeof originalDefine === "function" && originalDefine.amd) {
+    workerDefine = function (name, dependencies, factory) {
+      if (name !== "pdfjs-dist/build/pdf.worker") return originalDefine.apply(this, arguments);
+      try {
+        globalThis.pdfjsWorker = factory();
+      } catch (error) {
+        initializationError = error;
+      }
+    };
+    workerDefine.amd = originalDefine.amd;
+    globalThis.define = workerDefine;
+  }
+  try {
+    await loadPdfScript("/vendor/pdfjs/pdf.worker.min.js");
+    if (initializationError) throw initializationError;
+  } finally {
+    if (workerDefine && globalThis.define === workerDefine) globalThis.define = originalDefine;
+  }
+}
+
+function loadPdfJs() {
+  if (pdfJsPromise) return pdfJsPromise;
+  pdfJsPromise = (async () => {
+    if (!window.pdfjsLib) await loadPdfScript("/vendor/pdfjs/pdf.min.js");
+    if (!window.pdfjsLib) throw new Error("PDF预览组件加载失败");
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js";
+    if (isCompactMobileTv()) {
+      if (!globalThis.pdfjsWorker?.WorkerMessageHandler && !window.pdfjsWorker?.WorkerMessageHandler) {
+        await loadPdfWorker();
+      }
+      const worker = globalThis.pdfjsWorker || window.pdfjsWorker || globalThis["pdfjs-dist/build/pdf.worker"];
+      if (!worker?.WorkerMessageHandler) {
+        throw new Error("PDF解析组件加载失败，请重新打开看板");
+      }
+      globalThis.pdfjsWorker = worker;
+      window.pdfjsWorker = worker;
+    }
+    return window.pdfjsLib;
+  })().catch((error) => {
     pdfJsPromise = null;
     throw error;
   });
   return pdfJsPromise;
 }
+
 
 function releaseDrawingPdf(preview) {
   if (!preview) return;
@@ -293,6 +339,7 @@ function previewFileBody(preview) {
   const drawing = preview.drawings[preview.index];
   if (preview.loading) return '<div class="drawing-preview-status">正在加载图纸...</div>';
   if (preview.error) return `<div class="drawing-preview-status error">${esc(preview.error)}</div>`;
+  if (!drawing) return '<div class="drawing-preview-status error">暂未找到图纸</div>';
   if (isImageDrawing(drawing)) {
     return `<div class="drawing-image-stage"><img class="drawing-preview-image" src="${esc(preview.previewUrl)}" alt="${esc(drawing.name)}" style="transform:scale(${preview.zoom})"></div>`;
   }
@@ -305,7 +352,7 @@ function renderDrawingPreview() {
   const preview = tvState.drawingPreview;
   document.body.classList.toggle("drawing-preview-open", Boolean(preview));
   if (!preview) return;
-  const drawing = preview.drawings[preview.index];
+  const drawing = preview.drawings[preview.index] || { name: "", fileType: "" };
   const imageType = isImageDrawing(drawing);
   const compactPdf = isCompactPdfPreview(preview);
   const compactPdfReady = compactPdf && Boolean(preview.pdfDocument) && !preview.loading && !preview.error;
@@ -318,7 +365,7 @@ function renderDrawingPreview() {
         <div class="drawing-preview-actions">
           ${compactPdfReady ? `<button type="button" data-pdf-page="prev" title="上一页"${preview.pdfPage <= 1 ? " disabled" : ""}>‹</button><span class="pdf-page-count">${preview.pdfPage}/${preview.pdfPages}</span><button type="button" data-pdf-page="next" title="下一页"${preview.pdfPage >= preview.pdfPages ? " disabled" : ""}>›</button>` : ""}
           ${imageType || compactPdfReady ? '<button type="button" data-drawing-zoom="out" title="缩小">−</button><button type="button" data-drawing-zoom="reset" title="重置">1:1</button><button type="button" data-drawing-zoom="in" title="放大">＋</button>' : ""}
-          <a href="${esc(drawingFileUrl(drawing, true))}" download="${esc(drawing.name)}" title="下载原图">下载</a>
+          ${drawing.id ? `<a href="${esc(drawingFileUrl(drawing, true))}" download="${esc(drawing.name)}" title="下载原图">下载</a>` : ""}
           <button type="button" data-close-drawing-preview title="关闭">×</button>
         </div>
       </header>
@@ -366,12 +413,33 @@ async function selectDrawing(index) {
   }
 }
 
-function openDrawingPreview(orderId) {
+async function openDrawingPreview(orderId) {
   if (!isMobileTv()) return;
   const order = (tvState.data?.activeOrders || []).find((item) => String(item.id) === String(orderId));
-  if (!order?.drawings?.length) return;
-  tvState.drawingPreview = { order, drawings: order.drawings, index: 0, previewUrl: "", error: "", loading: true, zoom: 1 };
-  selectDrawing(0);
+  if (!order || Number(order.drawingCount ?? order.drawings?.length ?? 0) <= 0) return;
+  const preview = { order, drawings: [], index: 0, previewUrl: "", error: "", loading: true, zoom: 1 };
+  tvState.drawingPreview = preview;
+  renderDrawingPreview();
+  try {
+    if (Array.isArray(order.drawings) && order.drawings.length) {
+      preview.drawings = order.drawings;
+      await selectDrawing(0);
+      return;
+    }
+    const query = new URLSearchParams({ viewerToken: viewerToken() });
+    const response = await fetch(`/api/tv-orders/${encodeURIComponent(order.id)}/drawings?${query}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "图纸加载失败");
+    if (tvState.drawingPreview !== preview) return;
+    preview.drawings = Array.isArray(data.items) ? data.items : [];
+    if (!preview.drawings.length) throw new Error("暂未找到图纸");
+    await selectDrawing(0);
+  } catch (error) {
+    if (tvState.drawingPreview !== preview) return;
+    preview.loading = false;
+    preview.error = error.message || "图纸加载失败";
+    renderDrawingPreview();
+  }
 }
 
 function closeDrawingPreview() {
@@ -502,6 +570,7 @@ function render(data, { preserveScroll = false } = {}) {
     ? statusActiveEnd + (Number(dist.delayed || 0) / statusTotal) * 100
     : 0;
   const activeOrders = data.activeOrders || [];
+  const activeOrderTotal = Number(data.activeOrderTotal ?? activeOrders.length);
   const orderPages = mobileMode ? null : tvOrderPages(activeOrders);
   const totalScreens = mobileMode ? 1 : 1 + orderPages.laterPages.length;
   if (tvState.screenPage >= totalScreens) tvState.screenPage = 0;
@@ -514,8 +583,9 @@ function render(data, { preserveScroll = false } = {}) {
           <h1>${isDispatchBoard() ? "派工看板" : "生产状态监控看板"}</h1>
           <div class="subtitle">PRODUCTION CONTROL</div>
         </div>
+        ${sourceTabs()}
       </div>
-      <div class="company-name">宁波未来机械${sourceTabs()}</div>
+      <div class="company-name">宁波未来机械</div>
       <div class="live"><span class="dot"></span><span>LIVE</span><span id="clock">${esc(clockText(data.generatedAt))}</span></div>
     </header>
   `;
@@ -563,7 +633,7 @@ function render(data, { preserveScroll = false } = {}) {
       ${metricsHtml}
       ${chartsHtml}
       <section class="orders">
-        <div class="section-title"><strong>加工工单</strong><span class="muted">共 ${activeOrders.length} 个加工工单，可上下滑动查看</span></div>
+        <div class="section-title"><strong>加工工单</strong><span class="muted">共 ${activeOrderTotal} 个加工工单，可上下滑动查看</span></div>
         <div class="order-list">
           ${activeOrders.length ? activeOrders.map((order) => orderRow(order, true)).join("") : '<div class="panel empty-orders">暂无加工工单</div>'}
         </div>
@@ -623,20 +693,89 @@ function render(data, { preserveScroll = false } = {}) {
   });
 }
 
+function dashboardContentKey(data) {
+  const { generatedAt, ...content } = data;
+  return JSON.stringify(content);
+}
+
+async function loadRemainingOrders(baseParams, total, generation, initialOrders) {
+  const orders = [...initialOrders];
+  const knownIds = new Set(orders.map((item) => item.id));
+  for (let offset = TV_ORDER_BATCH_SIZE; offset < total; offset += TV_ORDER_BATCH_SIZE) {
+    const params = new URLSearchParams(baseParams);
+    params.set("offset", String(offset));
+    params.set("limit", String(TV_ORDER_BATCH_SIZE));
+    const response = await fetch(`/api/tv-dashboard?${params}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "工单加载失败");
+    if (generation !== tvState.loadGeneration) return null;
+    const additions = data.activeOrders.filter((item) => !knownIds.has(item.id));
+    additions.forEach((item) => knownIds.add(item.id));
+    orders.push(...additions);
+  }
+  return orders;
+}
+
 async function load() {
+  if (loadInFlight) return new Promise((resolve) => queuedLoadResolvers.push(resolve));
+  loadInFlight = true;
+  const generation = ++tvState.loadGeneration;
   try {
-    const preserveScroll = Boolean(tvState.data) && isMobileTv();
+    const mobileMode = isMobileTv();
+    const hadData = Boolean(tvState.data);
     const token = viewerToken();
     const params = new URLSearchParams({ source: sourceView() });
     if (token) params.set("viewerToken", token);
+    if (isMobileTv()) {
+      params.set("offset", "0");
+      params.set("limit", String(TV_ORDER_BATCH_SIZE));
+    }
     const endpoint = `/api/tv-dashboard?${params}`;
     const res = await fetch(endpoint);
     const data = await res.json();
-    tvState.data = data;
-    render(data, { preserveScroll });
-    syncCarousel(data.settings || {});
+    if (!res.ok) throw new Error(data.error || "看板加载失败");
+    if (generation !== tvState.loadGeneration) return;
+    const initialLoad = !hadData;
+    if (!mobileMode || initialLoad) {
+      tvState.data = data;
+      render(data, { preserveScroll: mobileMode && hadData });
+      syncCarousel(data.settings || {});
+      if (mobileMode && Number(data.activeOrderTotal || 0) > data.activeOrders.length) {
+        const initialCount = data.activeOrders.length;
+        const orders = await loadRemainingOrders(params, data.activeOrderTotal, generation, data.activeOrders);
+        if (!orders || generation !== tvState.loadGeneration) return;
+        const additions = orders.slice(initialCount);
+        const orderList = tvRoot.querySelector(".orders .order-list");
+        if (orderList && additions.length) {
+          orderList.insertAdjacentHTML("beforeend", additions.map((order) => orderRow(order, true)).join(""));
+        }
+        data.activeOrders = orders;
+      }
+      return;
+    }
+
+    const orders = await loadRemainingOrders(params, Number(data.activeOrderTotal || 0), generation, data.activeOrders);
+    if (!orders || generation !== tvState.loadGeneration) return;
+    data.activeOrders = orders;
+    if (dashboardContentKey(data) !== dashboardContentKey(tvState.data)) {
+      tvState.data = data;
+      render(data, { preserveScroll: true });
+      syncCarousel(data.settings || {});
+      return;
+    }
+    tvState.data.generatedAt = data.generatedAt;
+    const clock = document.getElementById("clock");
+    if (clock) clock.textContent = clockText(data.generatedAt);
   } catch (error) {
-    tvRoot.innerHTML = `<section class="loading">看板加载失败：${esc(error.message)}</section>`;
+    if (!tvState.data) tvRoot.innerHTML = `<section class="loading">看板加载失败：${esc(error.message)}</section>`;
+  } finally {
+    loadInFlight = false;
+    if (queuedLoadResolvers.length) {
+      const resolvers = queuedLoadResolvers;
+      queuedLoadResolvers = [];
+      await load();
+      resolvers.forEach((resolve) => resolve());
+    }
   }
 }
 
@@ -675,6 +814,113 @@ async function toggleDispatchRoute(node) {
     showDispatchMessage(error.message, true);
     await load();
   }
+}
+
+function closeDispatchEditDialog() {
+  document.querySelector(".dispatch-edit-backdrop")?.remove();
+}
+
+function dispatchDateLabel(value) {
+  return value ? value.replaceAll("-", "/") : "未排期";
+}
+
+function openDispatchEditDialog(kind, target) {
+  closeDispatchEditDialog();
+  const isSchedule = kind === "schedule";
+  const title = isSchedule ? "是否对排期进行更改" : "是否对交期进行更改";
+  const subject = isSchedule
+    ? `${target.workNo} · ${target.routeName}`
+    : `订单 ${target.orderNo}`;
+  const modal = document.createElement("div");
+  modal.className = "dispatch-edit-backdrop";
+  modal.innerHTML = `
+    <section class="dispatch-edit-dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <header><h2>${esc(title)}</h2><button type="button" data-dispatch-edit-close>关闭</button></header>
+      <p class="dispatch-edit-subject">${esc(subject)}</p>
+      <p>确认后仅修改${isSchedule ? "此工序排期" : "订单交期（工序排期不变）"}。</p>
+      <div class="dispatch-edit-actions"><button type="button" data-dispatch-edit-cancel>取消</button><button type="button" class="primary" data-dispatch-edit-confirm>确认更改</button></div>
+    </section>`;
+  modal.dataset.editKind = kind;
+  modal.dataset.targetId = String(isSchedule ? target.routeId : target.orderId);
+  modal.dataset.beforeStart = target.startDate || "";
+  modal.dataset.beforeEnd = target.endDate || "";
+  modal.dataset.beforeDue = target.dueDate || "";
+  document.body.appendChild(modal);
+}
+
+function renderDispatchEditForm(modal) {
+  const kind = modal.dataset.editKind;
+  const isSchedule = kind === "schedule";
+  const start = modal.dataset.beforeStart || "";
+  const end = modal.dataset.beforeEnd || "";
+  const due = modal.dataset.beforeDue || "";
+  const title = isSchedule ? "修改工序排期" : "修改订单交期";
+  const subject = modal.querySelector(".dispatch-edit-subject")?.textContent || "";
+  modal.innerHTML = `
+    <section class="dispatch-edit-dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <header><h2>${title}</h2><button type="button" data-dispatch-edit-close>关闭</button></header>
+      <p class="dispatch-edit-subject">${esc(subject)}</p>
+      ${isSchedule
+        ? `<label>计划开始日<input type="date" data-edit-start value="${esc(start)}"></label><label>计划结束日<input type="date" data-edit-end value="${esc(end)}"></label><p class="dispatch-edit-hint">两项都留空表示未排期；开始日不得晚于结束日。</p><p class="dispatch-edit-preview">排期：<span data-edit-preview>${esc(dispatchDateLabel(start))} → ${esc(dispatchDateLabel(end))}</span></p>`
+        : `<label>当前交期<input type="date" value="${esc(due)}" disabled></label><label>新交期<input type="date" data-edit-due value="${esc(due)}"></label><p class="dispatch-edit-preview">交期：${esc(dispatchDateLabel(due))} → <span data-edit-preview>${esc(dispatchDateLabel(due))}</span></p><p class="dispatch-edit-hint">工序排期保持不变。</p>`}
+      <p class="dispatch-edit-error" role="alert"></p>
+      <div class="dispatch-edit-actions"><button type="button" data-dispatch-edit-cancel>取消</button><button type="button" class="primary" data-dispatch-edit-save>保存</button></div>
+    </section>`;
+}
+
+async function saveDispatchEdit(modal) {
+  const isSchedule = modal.dataset.editKind === "schedule";
+  const start = modal.querySelector("[data-edit-start]")?.value || "";
+  const end = modal.querySelector("[data-edit-end]")?.value || "";
+  const due = modal.querySelector("[data-edit-due]")?.value || "";
+  const errorNode = modal.querySelector(".dispatch-edit-error");
+  if (isSchedule && start && end && start > end) {
+    errorNode.textContent = "计划开始日不能晚于结束日";
+    return;
+  }
+  if (!isSchedule && !due) {
+    errorNode.textContent = "请选择新的交期";
+    return;
+  }
+  const button = modal.querySelector("[data-dispatch-edit-save]");
+  button.disabled = true;
+  errorNode.textContent = "";
+  const payload = isSchedule
+    ? { routeId: modal.dataset.targetId, expectedStartDate: modal.dataset.beforeStart, expectedEndDate: modal.dataset.beforeEnd, plannedStartDate: start, plannedEndDate: end }
+    : { orderId: modal.dataset.targetId, expectedDueDate: modal.dataset.beforeDue, dueDate: due };
+  try {
+    const response = await fetch(isSchedule ? "/api/dispatch-board/route-schedule" : "/api/dispatch-board/order-due-date", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${viewerToken()}` },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "保存失败，请重试");
+    closeDispatchEditDialog();
+    showDispatchMessage("已保存，正在刷新看板");
+    await load();
+  } catch (error) {
+    button.disabled = false;
+    errorNode.textContent = error.message;
+  }
+}
+
+function beginDispatchEditFromNode(node) {
+  if (node.matches("[data-dispatch-schedule]")) {
+    openDispatchEditDialog("schedule", {
+      routeId: node.dataset.routeId,
+      routeName: node.dataset.routeName,
+      workNo: node.dataset.workNo,
+      startDate: node.dataset.routeStart,
+      endDate: node.dataset.routeEnd,
+    });
+    return;
+  }
+  openDispatchEditDialog("due-date", {
+    orderId: node.dataset.orderId,
+    orderNo: node.dataset.orderNo,
+    dueDate: node.dataset.dueDate,
+  });
 }
 
 function screenCount() {
@@ -788,6 +1034,21 @@ function syncCarousel(settings) {
 
 load();
 document.addEventListener("click", (event) => {
+  const editModal = event.target.closest(".dispatch-edit-backdrop");
+  if (editModal) {
+    if (event.target.closest("[data-dispatch-edit-close], [data-dispatch-edit-cancel]") || event.target === editModal) {
+      closeDispatchEditDialog();
+      return;
+    }
+    if (event.target.closest("[data-dispatch-edit-confirm]")) {
+      renderDispatchEditForm(editModal);
+      return;
+    }
+    if (event.target.closest("[data-dispatch-edit-save]")) {
+      saveDispatchEdit(editModal);
+      return;
+    }
+  }
   const drawingButton = event.target.closest("[data-drawing-order-id]");
   if (drawingButton) {
     event.preventDefault();
@@ -821,11 +1082,50 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (!isDispatchBoard()) return;
+  const dueNode = event.target.closest("[data-dispatch-due-date]");
+  if (dueNode) {
+    event.preventDefault();
+    return;
+  }
   const node = event.target.closest(".route-node.dispatch-clickable");
-  if (node) toggleDispatchRoute(node);
+  if (node) {
+    const pending = dispatchClickTimers.get(node);
+    if (pending) clearTimeout(pending);
+    dispatchClickTimers.set(node, setTimeout(() => {
+      dispatchClickTimers.delete(node);
+      toggleDispatchRoute(node);
+    }, 500));
+  }
+});
+document.addEventListener("dblclick", (event) => {
+  if (!isDispatchBoard()) return;
+  const scheduleNode = event.target.closest("[data-dispatch-schedule]");
+  const dueNode = event.target.closest("[data-dispatch-due-date]");
+  if (!scheduleNode && !dueNode) return;
+  event.preventDefault();
+  const routeNode = scheduleNode?.closest(".route-node.dispatch-clickable");
+  const pending = routeNode && dispatchClickTimers.get(routeNode);
+  if (pending) {
+    clearTimeout(pending);
+    dispatchClickTimers.delete(routeNode);
+  }
+  beginDispatchEditFromNode(scheduleNode || dueNode);
+});
+document.addEventListener("input", (event) => {
+  const modal = event.target.closest(".dispatch-edit-backdrop");
+  if (!modal) return;
+  const preview = modal.querySelector("[data-edit-preview]");
+  if (!preview) return;
+  const start = modal.querySelector("[data-edit-start]")?.value;
+  const end = modal.querySelector("[data-edit-end]")?.value;
+  const due = modal.querySelector("[data-edit-due]")?.value;
+  preview.textContent = modal.dataset.editKind === "schedule"
+    ? `${dispatchDateLabel(start)} → ${dispatchDateLabel(end)}`
+    : dispatchDateLabel(due);
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && tvState.drawingPreview) closeDrawingPreview();
+  if (event.key === "Escape") closeDispatchEditDialog();
 });
 window.addEventListener("resize", () => {
   if (tvState.data) {

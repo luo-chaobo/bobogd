@@ -37,6 +37,7 @@ test("direct node startup loads integration settings from config.local.json", as
     fs.mkdirSync(path.join(directory, "public"), { recursive: true });
     fs.copyFileSync(path.join(root, "server.js"), path.join(directory, "server.js"));
     fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(directory, "lib", "weapp-image.js"));
+    fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(directory, "lib", "order-financials.js"));
     fs.writeFileSync(path.join(directory, "public", "index.html"), "test");
     fs.writeFileSync(path.join(directory, "config.local.json"), JSON.stringify({
       serverEnvironment: {

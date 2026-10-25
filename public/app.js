@@ -31,6 +31,7 @@ const state = {
     status: "",
     source: "",
     sourceChannel: "",
+    workNo: "",
   },
   historyResults: {
     workOrders: [],
@@ -42,6 +43,9 @@ const state = {
   },
   dashboardFinishedFrom: isoDate(-6),
   dashboardFinishedTo: isoDate(0),
+  dashboardProcess: "",
+  dashboardInsightDays: 30,
+  dashboardInsight: null,
   historyDetailId: "",
   historyOrderId: "",
   repeatOrderMode: false,
@@ -50,6 +54,7 @@ const state = {
   customerFeedback: { customerId: "", workOrderId: "" },
   reportsFrom: monthStartDate(),
   reportsTo: isoDate(0),
+  deliveryRegion: "",
   tableSorts: {},
 };
 
@@ -133,9 +138,11 @@ const statusClass = {
   返工: "danger",
   暂停: "warn",
   生产中: "warn",
+  待创建工序: "warn",
 };
 
 const techProcessNames = ["设计", "激光", "切管", "折弯", "压铆", "攻丝", "焊接", "机加", "打磨", "喷塑", "装配", "质检"];
+const retiredProcessNames = new Set(["下料", "喷涂", "入库"]);
 const processColors = {
   设计: "#4f46e5",
   激光: "#e11d48",
@@ -208,8 +215,9 @@ function loginPage() {
   `;
 }
 
-function tag(text) {
-  return `<span class="tag ${statusClass[text] || ""}">${escapeHtml(text)}</span>`;
+function tag(text, extraClass = "") {
+  const classes = ["tag", statusClass[text], extraClass].filter(Boolean).join(" ");
+  return `<span class="${classes}">${escapeHtml(text)}</span>`;
 }
 
 const sourceChannelLabels = {
@@ -226,13 +234,39 @@ function orderSource(item) {
     : { origin: "factory", originLabel: "工厂单", channel: "factory_manual", channelLabel: "工厂单" };
 }
 
-function orderSourceBadge(item) {
+function orderSourceBadge(item, showPricingState = false) {
   const source = orderSource(item);
-  return tag(source.originLabel);
+  const order = item?.order || item || {};
+  const unitPrice = order.unitPrice;
+  const hasUnitPrice = unitPrice !== null && unitPrice !== undefined && String(unitPrice).trim() !== ""
+    && Number.isFinite(Number(unitPrice)) && Number(unitPrice) >= 0;
+  return tag(source.originLabel, showPricingState && hasUnitPrice ? "priced" : "");
 }
 
 function productionSourceBadge(item) {
   return orderSource(item).origin === "platform" ? tag("平台单") : "";
+}
+
+function workOrderCustomerName(workOrder) {
+  return workOrder.order?.externalCustomer || workOrder.customer?.name || "";
+}
+
+function platformOrderProductName(order) {
+  const productName = String(order?.productName || "").trim();
+  if (order.orderOrigin === "platform" && (!productName || (!order.material && productName === order.externalDescription))) return "待补产品信息";
+  return productName;
+}
+
+function workOrderProductName(workOrder) {
+  return platformOrderProductName(workOrder.order || {}) || String(workOrder.productName || "").trim();
+}
+
+function workOrderDisplayStatus(workOrder) {
+  if (workOrder.creationStatus === "pending") return "待创建工序";
+  const routes = workOrder.routes || [];
+  const hasStarted = routes.some((route) => route.status !== "待开始" || Number(route.completedQty || 0) > 0);
+  if (workOrder.status === "生产中" && routes.length && !hasStarted) return "待排产";
+  return workOrder.status;
 }
 
 function filterWorkOrdersBySource(workOrders, source, sourceChannel) {
@@ -244,9 +278,23 @@ function filterWorkOrdersBySource(workOrders, source, sourceChannel) {
 }
 
 function dashboardSourceTabs() {
-  return `<div class="source-filter"><span>看板订单范围</span><div class="source-tabs">${[["all", "全部订单"], ["factory", "工厂单"], ["platform", "平台单"]]
+  return `<div class="source-tabs">${[["all", "全部订单"], ["factory", "工厂单"], ["platform", "平台单"]]
     .map(([value, label]) => `<button type="button" class="btn secondary compact ${state.dashboardSource === value ? "active" : ""}" data-dashboard-source="${value}">${label}</button>`)
-    .join("")}</div></div>`;
+    .join("")}</div>`;
+}
+
+function ordersNavigation(data, pureDriver = false) {
+  if (pureDriver) return "";
+  const pendingCount = data.workOrders.filter((workOrder) => workOrder.creationStatus === "pending" && orderSource(workOrder).origin === "platform").length;
+  const countBadge = pendingCount ? ` <b class="nav-count">${pendingCount}</b>` : "";
+  return `<div class="nav-group">
+    <div class="nav-parent"><span>订单工单</span>${countBadge}</div>
+    <div class="nav-submenu">
+      <button class="${state.view === "ordersAll" ? "active" : ""}" data-view="ordersAll">全部订单</button>
+      <button class="${state.view === "ordersFactory" ? "active" : ""}" data-view="ordersFactory">工厂单</button>
+      <button class="${state.view === "ordersPlatform" ? "active" : ""}" data-view="ordersPlatform">平台单${countBadge}</button>
+    </div>
+  </div>`;
 }
 
 function completionSourceSummaryRows(summary = {}) {
@@ -417,23 +465,155 @@ function activeTechProcesses(data) {
   return sortedTechProcesses(data).filter((process) => process.active !== false);
 }
 
-function processLoadCards(data) {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return sortedTechProcesses(data)
+function dashboardProcesses(data) {
+  const usedNames = new Set(data.routes.map((route) => route.processName).filter(Boolean));
+  const processes = new Map(data.processes
+    .filter((process) => process.active !== false || usedNames.has(process.name))
+    .map((process) => [process.name, process]));
+  data.routes.forEach((route) => {
+    if (route.processName && !processes.has(route.processName)) {
+      processes.set(route.processName, { id: route.processId, name: route.processName });
+    }
+  });
+  return [...processes.values()].filter((process) => !retiredProcessNames.has(process.name)).sort((a, b) => {
+    const order = (process) => {
+      const index = techProcessNames.indexOf(process.name);
+      return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+    };
+    return order(a) - order(b) || Number(a.sort || Number.MAX_SAFE_INTEGER) - Number(b.sort || Number.MAX_SAFE_INTEGER)
+      || a.name.localeCompare(b.name, "zh-Hans-CN");
+  });
+}
+
+function groupDashboardRoutes(routes) {
+  const byName = new Map();
+  const byId = new Map();
+  for (const route of routes) {
+    if (route.processName) {
+      if (!byName.has(route.processName)) byName.set(route.processName, []);
+      byName.get(route.processName).push(route);
+    }
+    if (route.processId) {
+      if (!byId.has(route.processId)) byId.set(route.processId, []);
+      byId.get(route.processId).push(route);
+    }
+  }
+  return { byName, byId };
+}
+
+function routesForDashboardProcess(grouped, process) {
+  const byName = grouped.byName.get(process.name) || [];
+  const byId = grouped.byId.get(process.id) || [];
+  return byId.length ? [...new Set([...byName, ...byId])] : byName;
+}
+
+function processLoadCards(data, now = new Date()) {
+  const todayKey = shanghaiDateKey(now);
+  const activeWorkOrders = new Set(data.workOrders.filter((workOrder) => workOrder.status !== "已完成" && workOrder.creationStatus !== "pending").map((workOrder) => workOrder.id));
+  const groupedRoutes = groupDashboardRoutes(data.routes);
+  return dashboardProcesses(data)
     .map((p) => {
-      const matchedRoutes = data.routes.filter((r) => r.processName === p.name || r.processId === p.id);
+      const matchedRoutes = routesForDashboardProcess(groupedRoutes, p);
       const completedToday = matchedRoutes.filter((route) => {
         if (route.status !== "已完成") return false;
-        const completedAt = new Date(route.completedAt || route.lastReportedAt || "");
-        return !Number.isNaN(completedAt.getTime()) && completedAt >= start && completedAt < end;
+        return shanghaiDateKey(route.completedAt || route.lastReportedAt || "") === todayKey;
       }).length;
-      const remaining = matchedRoutes.filter((route) => route.status !== "已完成").length;
-      return `<div class="card process-load-card"><strong>${escapeHtml(p.name)}</strong><p class="muted">今日完成 ${completedToday} / 待完成 ${remaining}</p></div>`;
+      const remaining = matchedRoutes.filter((route) => route.status !== "已完成" && activeWorkOrders.has(route.workOrderId)).length;
+      return `<div class="card process-load-card"><strong>${escapeHtml(p.name)}</strong><p>今日完成 <strong class="load-completed">${completedToday}</strong> <span class="muted">/</span> 待完成 <strong class="load-pending">${remaining}</strong></p></div>`;
     })
     .join("");
+}
+
+function scheduleInsightData(data, now, days) {
+  const todayKey = shanghaiDateKey(now);
+  const [year, month, day] = todayKey.split("-").map(Number);
+  const fromKey = new Date(Date.UTC(year, month - 1, day - days + 1)).toISOString().slice(0, 10);
+  const workOrders = new Map(data.workOrders.map((workOrder) => [workOrder.id, workOrder]));
+  const latestReports = new Map();
+  for (const report of data.reports || []) {
+    const previous = latestReports.get(report.routeId);
+    if (!previous || String(report.createdAt || "") > String(previous.createdAt || "")) latestReports.set(report.routeId, report);
+  }
+  const groupedRoutes = groupDashboardRoutes(data.routes);
+  return dashboardProcesses(data).map((process) => {
+    const result = {
+      name: process.name,
+      risk: { overdue: [], urgent: [], normal: [], unplanned: [] },
+      unstarted: [], onTime: [], late: [],
+    };
+    for (const route of routesForDashboardProcess(groupedRoutes, process)) {
+      const workOrder = workOrders.get(route.workOrderId);
+      if (!workOrder || workOrder.creationStatus === "pending") continue;
+      const report = latestReports.get(route.id);
+      const plannedStartDate = route.status === "已完成" ? report?.plannedStartDate ?? route.plannedStartDate : route.plannedStartDate;
+      const plannedEndDate = route.status === "已完成" ? report?.plannedEndDate ?? route.plannedEndDate : route.plannedEndDate;
+      const completedAtText = route.status === "已完成" ? report?.createdAt || route.completedAt || route.lastReportedAt : route.completedAt;
+      const item = { ...route, plannedStartDate, plannedEndDate, completedAt: completedAtText, workOrder };
+      const validStart = /^\d{4}-\d{2}-\d{2}$/.test(plannedStartDate || "") && shanghaiDateKey(`${plannedStartDate}T12:00:00+08:00`) === plannedStartDate;
+      const deadline = /^\d{4}-\d{2}-\d{2}$/.test(plannedEndDate || "")
+        ? new Date(`${plannedEndDate}T23:59:59.999+08:00`)
+        : null;
+      const hasPlan = validStart && deadline && !Number.isNaN(deadline.getTime())
+        && shanghaiDateKey(deadline) === plannedEndDate && plannedStartDate <= plannedEndDate;
+      if (route.status === "已完成") {
+        const completedAt = new Date(completedAtText || "");
+        const completedKey = shanghaiDateKey(completedAt);
+        if (hasPlan && report?.scheduleStatus !== "unplanned" && completedKey >= fromKey && completedKey <= todayKey) {
+          const onTime = completedAt.getTime() <= deadline.getTime();
+          result[onTime ? "onTime" : "late"].push(item);
+        }
+        continue;
+      }
+      if (workOrder.status === "已完成") continue;
+      const risk = !hasPlan ? "unplanned" : deadline.getTime() < now.getTime() ? "overdue" : deadline.getTime() - now.getTime() <= 48 * 60 * 60 * 1000 ? "urgent" : "normal";
+      result.risk[risk].push(item);
+      if (route.status === "待开始" && /^\d{4}-\d{2}-\d{2}$/.test(route.plannedStartDate || "") && route.plannedStartDate < todayKey) {
+        result.unstarted.push(item);
+      }
+    }
+    return result;
+  });
+}
+
+function dashboardInsightDetails(insights) {
+  const selection = state.dashboardInsight;
+  if (!selection) return `<section class="panel insight-details"><h3>工序明细</h3><p class="muted">点击图表查看工序明细</p></section>`;
+  const process = insights.find((item) => item.name === selection.processName);
+  const rows = selection.kind === "risk" ? process?.risk[selection.segment]
+    : selection.kind === "unstarted" ? process?.unstarted : process?.[selection.segment];
+  const titles = { overdue: "已超期", urgent: "48 小时内到期", normal: "正常", unplanned: "未排期", unstarted: "未开工超期", onTime: "计划内完工", late: "计划外完工" };
+  const title = `${selection.processName} · ${titles[selection.segment] || "工序明细"}`;
+  return `<section class="panel insight-details"><div class="section-heading"><h3>${escapeHtml(title)}</h3><span class="muted">${rows?.length || 0} 条工序</span></div>
+    <div class="table-wrap"><table><thead><tr><th>工单</th><th>工序状态</th><th>计划开始</th><th>计划结束</th><th>完成时间</th></tr></thead><tbody>
+    ${rows?.length ? rows.map((route) => `<tr><td>${escapeHtml(route.workOrder.workNo || route.workOrder.id)}</td><td>${escapeHtml(route.status)}</td><td>${escapeHtml(route.plannedStartDate || "未设置")}</td><td>${escapeHtml(route.plannedEndDate || "未设置")}</td><td>${escapeHtml(formatDateTime(route.completedAt || route.lastReportedAt || ""))}</td></tr>`).join("") : `<tr><td colspan="5" class="muted">当前筛选下暂无工序</td></tr>`}
+    </tbody></table></div></section>`;
+}
+
+function scheduleInsightCharts(insights) {
+  const riskTypes = [["overdue", "已超期"], ["urgent", "48 小时内"], ["normal", "正常"], ["unplanned", "未排期"]];
+  const totalRisk = insights.reduce((sum, item) => sum + Object.values(item.risk).reduce((count, routes) => count + routes.length, 0), 0);
+  const totalUnstarted = insights.reduce((sum, item) => sum + item.unstarted.length, 0);
+  const totalCompleted = insights.reduce((sum, item) => sum + item.onTime.length + item.late.length, 0);
+  const maxUnstarted = Math.max(1, ...insights.map((item) => item.unstarted.length));
+  return `<div class="insight-grid">
+    <section class="panel insight-panel insight-wide"><div class="section-heading"><div><h3>排期风险构成</h3><p class="muted">在产工序 ${totalRisk} 条；按计划结束日 23:59（北京时间）判断，缺计划单列。</p></div></div>
+      <div class="insight-legend">${riskTypes.map(([key, label]) => `<span class="insight-key insight-${key}">${label}</span>`).join("")}</div>
+      ${insights.length ? insights.map((item) => {
+        const total = Object.values(item.risk).reduce((count, routes) => count + routes.length, 0);
+        return `<div class="insight-row"><strong>${escapeHtml(item.name)}</strong><div class="insight-stack">${riskTypes.map(([key, label]) => item.risk[key].length ? `<button type="button" class="insight-segment insight-${key}" style="width:${item.risk[key].length / total * 100}%" data-insight-kind="risk" data-insight-process="${escapeHtml(item.name)}" data-insight-segment="${key}" title="${escapeHtml(item.name)} ${label} ${item.risk[key].length} 条">${item.risk[key].length}</button>` : "").join("") || `<span class="insight-empty-bar">0</span>`}</div><span>${total}</span></div>`;
+      }).join("") : `<p class="muted">暂无工序数据</p>`}
+    </section>
+    <section class="panel insight-panel"><div class="section-heading"><div><h3>未开工超期</h3><p class="muted">待开始且计划开始日早于今天；共 ${totalUnstarted} 条。</p></div></div>
+      ${insights.map((item) => `<div class="insight-row"><strong>${escapeHtml(item.name)}</strong><div class="insight-track">${item.unstarted.length ? `<button type="button" class="insight-age-bar" style="width:${item.unstarted.length / maxUnstarted * 100}%" data-insight-kind="unstarted" data-insight-process="${escapeHtml(item.name)}" data-insight-segment="unstarted" title="查看${escapeHtml(item.name)}未开工工序">${item.unstarted.length}</button>` : `<span class="insight-empty-bar">0</span>`}</div></div>`).join("") || `<p class="muted">暂无工序数据</p>`}
+    </section>
+    <section class="panel insight-panel"><div class="section-heading"><div><h3>计划内完工率</h3><p class="muted">近 ${state.dashboardInsightDays} 天已完工且设有完整计划区间的工序 ${totalCompleted} 条；未排期不计分母，提前或结束日当日完工计计划内，仅晚于结束日计计划外。</p></div><div class="insight-period">${[7, 30, 90].map((days) => `<button type="button" class="${state.dashboardInsightDays === days ? "active" : ""}" data-insight-days="${days}">${days}天</button>`).join("")}</div></div>
+      <div class="insight-legend"><span class="insight-key insight-on-time">计划内</span><span class="insight-key insight-late">计划外</span></div>
+      ${insights.map((item) => {
+        const count = item.onTime.length + item.late.length;
+        return `<div class="insight-row"><strong>${escapeHtml(item.name)}</strong><div class="insight-stack">${count ? `${item.onTime.length ? `<button type="button" class="insight-segment insight-on-time" style="width:${item.onTime.length / count * 100}%" data-insight-kind="completion" data-insight-process="${escapeHtml(item.name)}" data-insight-segment="onTime" title="计划内 ${item.onTime.length} 条">${item.onTime.length}</button>` : ""}${item.late.length ? `<button type="button" class="insight-segment insight-late" style="width:${item.late.length / count * 100}%" data-insight-kind="completion" data-insight-process="${escapeHtml(item.name)}" data-insight-segment="late" title="计划外 ${item.late.length} 条">${item.late.length}</button>` : ""}` : `<span class="insight-empty-bar">无排期完工数据</span>`}</div><span>${count ? `${Math.round(item.onTime.length / count * 100)}%` : "—"}</span></div>`;
+      }).join("") || `<p class="muted">暂无工序数据</p>`}
+    </section>
+  </div>`;
 }
 
 function mobileProcessTrack(workOrder) {
@@ -583,6 +763,8 @@ function dashboard(data) {
     .filter((workOrder) => workOrder.creationStatus !== "pending");
   const workOrderIds = new Set(workOrders.map((workOrder) => workOrder.id));
   const dashboardData = { ...data, workOrders, routes: data.routes.filter((route) => workOrderIds.has(route.workOrderId)) };
+  const insights = scheduleInsightData(dashboardData, new Date(), state.dashboardInsightDays)
+    .filter((item) => !state.dashboardProcess || item.name === state.dashboardProcess);
   const overdue = workOrders.filter((w) => w.overdue).length;
   const openExceptions = data.exceptions.filter((e) => e.status !== "已解决").length;
   const active = workOrders.filter((w) => w.status !== "已完成").length;
@@ -608,6 +790,9 @@ function dashboard(data) {
         ${processLoadCards(dashboardData)}
       </div>
     </section>
+    <section class="insight-toolbar"><div><h3>排产诊断</h3><p class="muted">按工序查看排期风险和计划执行情况；点击图表可定位具体工单。</p></div><label>工序筛选 <select id="dashboardProcess"><option value="">全部工序</option>${dashboardProcesses(dashboardData).map((process) => `<option value="${escapeHtml(process.name)}" ${state.dashboardProcess === process.name ? "selected" : ""}>${escapeHtml(process.name)}</option>`).join("")}</select></label></section>
+    ${scheduleInsightCharts(insights)}
+    ${dashboardInsightDetails(insights)}
     ${workOrderTable(dashboardData, { productionBoard: true })}
   `;
 }
@@ -617,7 +802,10 @@ function visibleWorkOrders(data, options = {}) {
     .filter((workOrder) => workOrder.status !== "已完成")
     .filter((workOrder) => options.includePending || workOrder.creationStatus !== "pending")
     .slice()
-    .sort((a, b) => String(a.order?.dueDate || "9999-12-31").localeCompare(String(b.order?.dueDate || "9999-12-31")));
+    .sort((a, b) => {
+      if (options.pendingFirst && a.creationStatus !== b.creationStatus) return a.creationStatus === "pending" ? -1 : 1;
+      return String(a.order?.dueDate || "9999-12-31").localeCompare(String(b.order?.dueDate || "9999-12-31"));
+    });
 }
 
 function workOrderTable(data, options = {}) {
@@ -636,12 +824,12 @@ function workOrderTable(data, options = {}) {
               .map(
                 (w) => `
                   <tr>
-                    <td>${escapeHtml(w.workNo)}<br>${options.productionBoard ? productionSourceBadge(w) : orderSourceBadge(w)}</td>
-                    <td>${escapeHtml(w.customer?.name || "")}<br><span class="muted">${escapeHtml(w.productName)}</span><br><span class="muted">${escapeHtml(w.planQty)} ${workOrderQuantityUnit(w)}</span></td>
+                    <td>${escapeHtml(w.workNo)}<br>${options.productionBoard ? productionSourceBadge(w) : orderSourceBadge(w, data.permissions?.viewOrderFinancials)}</td>
+                    <td>${escapeHtml(workOrderCustomerName(w))}<br><span class="muted">${escapeHtml(workOrderProductName(w))}</span><br><span class="muted">${escapeHtml(w.planQty)} ${workOrderQuantityUnit(w)}</span></td>
                     <td>${escapeHtml(formatDateTime(w.order?.createdAt || w.createdAt))}</td>
                     <td>${escapeHtml(w.currentProcess || "-")}</td>
                     <td>${escapeHtml(w.order?.dueDate || "")}${w.overdue ? " " + tag("延期") : ""}</td>
-                    <td>${tag(w.status)}</td>
+                    <td>${tag(workOrderDisplayStatus(w))}</td>
                     <td><div class="progress"><div style="width:${w.progress}%"></div></div><span class="muted">${w.progress}%</span></td>
                     <td>${attachmentGroupButton(workOrderDrawings(data, w), `${w.workNo} ${w.productName}`)}</td>
                     <td>${w.hasException ? tag("异常") : tag("正常")}</td>
@@ -663,6 +851,7 @@ function ordersPage(data, source = "all") {
   const filteredWorkOrders = filterWorkOrdersBySource(data.workOrders, sourceValue, source === "platform" ? state.orderSourceChannel : "");
   const pageData = { ...data, workOrders: filteredWorkOrders };
   const channelFilter = source === "platform" ? `<label class="field"><span>平台渠道</span><select id="orderSourceChannel"><option value="">全部平台渠道</option>${Object.entries(sourceChannelLabels).map(([value, label]) => `<option value="${value}" ${state.orderSourceChannel === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>` : "";
+  const financialFields = data.permissions?.viewOrderFinancials ? `<label class="field"><span>单价（元）</span><input id="unitPrice" type="number" min="0" step="0.01" inputmode="decimal" placeholder="选填"></label><label class="field"><span>总金额（元）</span><input id="totalAmount" type="text" readonly value=""></label>` : "";
   return `
     <div class="topbar"><h2>订单与工单</h2><button class="btn" data-action="showOrderForm">新建订单</button></div>
     ${channelFilter}
@@ -675,6 +864,7 @@ function ordersPage(data, source = "all") {
         <label class="field"><span>激光编号</span><input id="drawingNo" placeholder="请输入激光编号" /></label>
         <label class="field"><span>数量</span><div class="quantity-control"><input id="quantity" type="number" value="10" min="1" step="1" /><select id="quantityUnit"><option value="件" selected>件</option><option value="套">套</option></select></div></label>
         <label class="field"><span>交期</span><div class="date-combo"><input id="dueDate" placeholder="yyyy/mm/dd" inputmode="numeric" /><button class="date-pick-trigger" type="button" data-action="openDueDatePicker">选择</button><input id="dueDatePicker" class="date-hidden-picker" type="date" /></div></label>
+        ${financialFields}
         <label class="field"><span>优先级</span><select id="priority"><option>普通</option><option>急单</option></select></label>
         <label class="field"><span>重量（KG）</span><input id="weightKg" type="number" min="0" step="1" placeholder="请输入总重量" /></label>
         <label class="field wide"><span>图纸附件</span><input id="drawingFiles" type="file" accept=".jpg,.jpeg,.png,.pdf,.dwg,.dxf" multiple /><small class="muted">支持图片、PDF、DWG、DXF；图片可直接缩略预览，CAD 先保存原文件。</small></label>
@@ -683,7 +873,7 @@ function ordersPage(data, source = "all") {
       </div>
       <button class="btn" data-action="createOrder">保存订单并生成工单</button>
     </section>
-    ${workOrderTable(pageData, { allowDelete: true, allowEdit: true, allowConfirm: source === "platform", includePending: true })}
+    ${workOrderTable(pageData, { allowDelete: true, allowEdit: true, allowConfirm: source === "platform", includePending: true, pendingFirst: source === "platform" })}
     ${orderEditModal(data)}
     ${platformConfirmModal(data)}
   `;
@@ -693,15 +883,19 @@ function platformConfirmModal(data) {
   const order = data.orders.find((item) => item.id === state.confirmingPlatformOrderId);
   const workOrder = data.workOrders.find((item) => item.orderId === order?.id);
   if (!order || !workOrder) return "";
+  const productName = platformOrderProductName(order) === "待补产品信息" ? "" : platformOrderProductName(order);
   return `<div class="dialog-backdrop" data-action="closePlatformConfirm"><section class="dialog" onclick="event.stopPropagation()">
-    <div class="topbar"><div><h3>确认创建平台工单</h3><p class="muted">${escapeHtml(order.orderNo)} / ${escapeHtml(order.productName)}</p></div><button class="btn secondary compact" data-action="closePlatformConfirm">关闭</button></div>
+    <div class="topbar"><div><h3>确认创建平台工单</h3><p class="muted">${escapeHtml(order.orderNo)} / ${escapeHtml(productName || "待补产品信息")}</p></div><button class="btn secondary compact" data-action="closePlatformConfirm">关闭</button></div>
     <div class="form-grid">
-      <label class="field"><span>产品名称</span><input id="confirmProductName" value="${escapeHtml(order.productName || "")}"></label>
-      <label class="field"><span>数量</span><input id="confirmQuantity" type="number" min="1" step="1" value="${Number(order.quantity || 1)}"></label>
+      <label class="field"><span>产品名称</span><input id="confirmProductName" value="${escapeHtml(productName)}" placeholder="请补充实际产品名称" required></label>
+      <label class="field"><span>激光编号</span><input id="confirmDrawingNo" value="${escapeHtml(order.drawingNo || "")}" placeholder="请输入激光编号"></label>
+      <label class="field"><span>数量</span><div class="quantity-control"><input id="confirmQuantity" type="number" min="1" step="1" value="${Number(order.quantity || 1)}"><select id="confirmQuantityUnit"><option value="件" ${quantityUnit(order.quantityUnit) === "件" ? "selected" : ""}>件</option><option value="套" ${quantityUnit(order.quantityUnit) === "套" ? "selected" : ""}>套</option></select></div></label>
       <label class="field"><span>交期</span><input id="confirmDueDate" type="date" value="${escapeHtml(order.dueDate || "")}"></label>
       <label class="field"><span>优先级</span><select id="confirmPriority"><option ${order.priority !== "急单" ? "selected" : ""}>普通</option><option ${order.priority === "急单" ? "selected" : ""}>急单</option></select></label>
-      <label class="field"><span>配送地区</span><input id="confirmRegion" value="${escapeHtml(order.region || "")}" placeholder="省 / 市 / 区"></label>
-      <label class="field"><span>详细配送地址</span><input id="confirmDeliveryAddress" value="${escapeHtml(order.deliveryAddress || "")}" placeholder="缺少地址将不能进入配送池"></label>
+      <label class="field"><span>重量（KG）</span><input id="confirmWeightKg" type="number" min="0" step="1" value="${escapeHtml(order.weightKg ?? "")}" placeholder="请输入总重量"></label>
+      <label class="field"><span>配送地区</span><input id="confirmRegion" value="${escapeHtml(order.region || order.externalRegion || "")}" placeholder="已读取客户下单地址，可手动修正"></label>
+      <label class="field"><span>详细配送地址</span><input id="confirmDeliveryAddress" value="${escapeHtml(order.deliveryAddress || order.externalDeliveryAddress || "")}" placeholder="已读取客户下单地址，可手动修正"></label>
+      <label class="field wide"><span>图纸附件</span><input id="confirmDrawingFiles" type="file" accept=".jpg,.jpeg,.png,.pdf,.dwg,.dxf" multiple><small class="muted">支持图片、PDF、DWG、DXF；会随确认创建关联到本工单。</small></label>
       <label class="field wide"><span>备注</span><textarea id="confirmNote">${escapeHtml(order.note || "")}</textarea></label>
     </div>
     <div class="field wide"><span>选择工序</span><div class="checks">${activeTechProcesses(data).map((process) => `<label class="check-pill"><input type="checkbox" name="confirmProcess" value="${process.id}">${process.name}</label>`).join("")}</div></div>
@@ -712,16 +906,20 @@ function platformConfirmModal(data) {
 function orderEditModal(data) {
   const order = data.orders.find((item) => item.id === state.editingOrderId);
   if (!order) return "";
+  const orderWorkOrder = data.workOrders.find((item) => item.orderId === order.id);
+  const productName = orderWorkOrder?.creationStatus === "pending" && platformOrderProductName(order) === "待补产品信息" ? "" : order.productName || "";
   const drawings = data.drawings.filter((item) => item.orderId === order.id && !item.removedAt);
-  return `<div class="dialog-backdrop" data-action="closeOrderEdit"><section class="dialog" onclick="event.stopPropagation()">
+  const financialFields = data.permissions?.viewOrderFinancials ? `<label class="field"><span>单价（元）</span><input id="editUnitPrice" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(order.unitPrice ?? "")}" placeholder="选填"></label><label class="field"><span>总金额（元）</span><input id="editTotalAmount" type="text" readonly value="${escapeHtml(order.totalAmount ?? "")}"></label>` : "";
+  return `<div class="dialog-backdrop order-edit-backdrop" data-action="closeOrderEdit"><section class="dialog order-edit-dialog" onclick="event.stopPropagation()">
     <div class="topbar"><h3>编辑订单</h3><button class="btn secondary compact" data-action="closeOrderEdit">关闭</button></div>
     <div class="form-grid">
       <label class="field"><span>订单号</span><input id="editOrderNo" value="${escapeHtml(order.orderNo)}"></label>
       <label class="field"><span>客户</span><select id="editCustomerId">${data.customers.map((c) => `<option value="${c.id}" ${c.id === order.customerId ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}</select></label>
-      <label class="field"><span>产品名称</span><input id="editProductName" value="${escapeHtml(order.productName)}"></label>
+      <label class="field"><span>产品名称</span><input id="editProductName" value="${escapeHtml(productName)}" placeholder="${productName ? "" : "请补充实际产品名称"}"></label>
       <label class="field"><span>激光编号</span><input id="editDrawingNo" value="${escapeHtml(order.drawingNo || "")}"></label>
       <label class="field"><span>数量</span><div class="quantity-control"><input id="editQuantity" type="number" min="1" step="1" value="${escapeHtml(order.quantity)}"><select id="editQuantityUnit"><option value="件" ${quantityUnit(order.quantityUnit) === "件" ? "selected" : ""}>件</option><option value="套" ${quantityUnit(order.quantityUnit) === "套" ? "selected" : ""}>套</option></select></div></label>
       <label class="field"><span>交期</span><input id="editDueDate" type="date" value="${escapeHtml(order.dueDate || "")}"></label>
+      ${financialFields}
       <label class="field"><span>优先级</span><select id="editPriority"><option ${order.priority === "普通" ? "selected" : ""}>普通</option><option ${order.priority === "急单" ? "selected" : ""}>急单</option></select></label>
       <label class="field"><span>重量（KG）</span><input id="editWeightKg" type="number" min="0" step="1" value="${escapeHtml(order.weightKg ?? "")}"></label>
       <label class="field wide"><span>备注</span><textarea id="editNote">${escapeHtml(order.note || "")}</textarea></label>
@@ -730,6 +928,22 @@ function orderEditModal(data) {
     </div>
     <div class="actions"><button class="btn" data-action="saveOrderEdit">保存修改</button></div>
   </section></div>`;
+}
+
+function updateFinancialTotal(quantityId, priceId, totalId) {
+  const quantity = Number(el(quantityId)?.value);
+  const priceText = String(el(priceId)?.value || "").trim();
+  const total = el(totalId);
+  if (!total) return;
+  if (!priceText) {
+    total.value = "";
+    return;
+  }
+  if (!/^\d+(?:\.\d{1,2})?$/.test(priceText) || !Number.isFinite(quantity)) {
+    total.value = "";
+    return;
+  }
+  total.value = (Number(priceText) * quantity).toFixed(2);
 }
 
 function customersPage(data) {
@@ -917,6 +1131,7 @@ function historyPage(data) {
       <select id="historyStatus"><option value="">全部状态</option>${["生产中", "已完成", "已发货", "已开票"].map((name) => `<option value="${name}" ${filters.status === name ? "selected" : ""}>${name}</option>`).join("")}</select>
       <label class="field"><span>来源筛选</span><select id="historySource"><option value="">全部来源</option><option value="factory" ${filters.source === "factory" ? "selected" : ""}>工厂单</option><option value="platform" ${filters.source === "platform" ? "selected" : ""}>平台单</option></select></label>
       <label class="field"><span>平台渠道</span><select id="historySourceChannel"><option value="">全部平台渠道</option>${Object.entries(sourceChannelLabels).map(([value, label]) => `<option value="${value}" ${filters.sourceChannel === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <label class="field"><span>工单号</span><input id="historyWorkNo" placeholder="输入工单号" value="${escapeHtml(filters.workNo || "")}" /></label>
     </section>
     <section class="panel" style="margin-bottom:14px">
       <h3>历史工单</h3>
@@ -1127,10 +1342,14 @@ function reportsPage(data) {
   const sourceRows = completionSourceSummaryRows(data.completionSourceSummary);
   return `
     <div class="topbar report-topbar"><h2>基础报表</h2><div class="actions report-actions">
+      <div class="report-date-group">
       <label class="compact-date-field"><span>开始日期</span><input id="reportsFrom" type="date" value="${state.reportsFrom}" /></label>
       <label class="compact-date-field"><span>结束日期</span><input id="reportsTo" type="date" value="${state.reportsTo}" /></label>
+      </div>
+      <div class="report-button-group">
       <button class="btn" data-action="exportManagementReport">导出管理分析</button>
       <button class="btn secondary" data-action="exportReportsCsv">导出报工 CSV</button><button class="btn secondary" data-action="export">导出完整数据</button>
+      </div>
     </div></div>
     <section class="grid cols-3">
       ${reportUserSummaries(data)
@@ -1201,52 +1420,146 @@ function settingsPage(data) {
 }
 
 function deliveriesPage(data) {
-  const labels = { waiting: "待配送", delivering: "配送中", delivered: "已送达", legacy_shipped: "旧数据已发货待确认" };
   const pureDriver = userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver";
+  if (pureDriver) return driverDeliveriesPage(data);
   const items = (data.deliveries || []).filter((delivery) => !pureDriver || delivery.driverId === state.user.id || delivery.status === "waiting").map((delivery) => {
     const order = data.orders.find((item) => item.id === delivery.orderId) || {};
     const driver = data.users.find((item) => item.id === delivery.driverId) || {};
     const proofs = (delivery.proofAttachmentIds || []).map((attachmentId) => data.attachments.find((attachment) => attachment.id === attachmentId)).filter(Boolean);
-    return `<tr><td>${escapeHtml(order.orderNo || delivery.orderId)}<br><span class="muted">${escapeHtml(order.productName || "")}</span></td><td>${escapeHtml(delivery.addressSnapshot?.region || order.region || "地址待补全")}<br>${escapeHtml(delivery.addressSnapshot?.deliveryAddress || order.deliveryAddress || "")}</td><td>${escapeHtml(labels[delivery.status] || delivery.status)}</td><td>${escapeHtml(driver.name || "-")}</td><td>${escapeHtml(formatDateTime(delivery.startedAt || ""))}</td><td>${escapeHtml(formatDateTime(delivery.deliveredAt || ""))}</td><td>${proofs.map((proof, index) => `<a href="${escapeHtml(proof.url)}" target="_blank" rel="noopener">照片${index + 1}</a>`).join(" ") || "-"}</td><td>${["delivering", "delivered"].includes(delivery.status) ? `<button class="btn secondary compact" data-release-delivery="${order.id}">${delivery.status === "delivered" ? "纠正状态" : "退回待配送"}</button>` : "-"}</td></tr>`;
+    return `<tr><td>${escapeHtml(order.orderNo || delivery.orderId)}<br><span class="muted">${escapeHtml(order.productName || "")}</span></td><td>${escapeHtml(delivery.addressSnapshot?.region || order.region || "地址待补全")}<br>${escapeHtml(delivery.addressSnapshot?.deliveryAddress || order.deliveryAddress || "")}</td><td>${deliveryStatusBadge(delivery.status)}</td><td>${escapeHtml(driver.name || "-")}</td><td>${escapeHtml(formatDateTime(delivery.startedAt || ""))}</td><td>${escapeHtml(formatDateTime(delivery.deliveredAt || ""))}</td><td>${deliveryProofButton(proofs, order)}</td><td>${["delivering", "delivered"].includes(delivery.status) ? `<button class="btn secondary compact" data-release-delivery="${order.id}">${delivery.status === "delivered" ? "纠正状态" : "退回待配送"}</button>` : "-"}</td></tr>`;
   }).join("");
   return `<div class="topbar"><h2>配送管理</h2><button class="btn secondary" data-action="refresh">刷新</button></div><section class="panel"><div class="table-wrap"><table><thead><tr><th>订单</th><th>配送地址</th><th>状态</th><th>司机</th><th>出发时间</th><th>送达时间</th><th>送达凭证</th><th>操作</th></tr></thead><tbody>${items || `<tr><td colspan="8" class="muted">暂无配送记录</td></tr>`}</tbody></table></div></section>`;
 }
 
-function adminShell() {
-  const data = state.data;
-  const pureDriver = userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver";
+function deliveryStatusBadge(status) {
+  const labels = { waiting: "待配送", delivering: "配送中", delivered: "已送达", legacy_shipped: "旧数据已发货待确认" };
+  const kind = Object.hasOwn(labels, status) ? status : "unknown";
+  return `<span class="delivery-status delivery-status--${kind}">${escapeHtml(labels[status] || status)}</span>`;
+}
+
+function deliveryProofButton(proofs, order) {
+  return attachmentGroupButton(proofs, `${order.orderNo || order.id || "订单"} 送达凭证`);
+}
+
+function deliveryOrder(data, delivery) {
+  return data.orders.find((item) => item.id === delivery.orderId) || {};
+}
+
+function deliveryAddress(order, delivery) {
+  const region = delivery.addressSnapshot?.region || order.region || "";
+  const address = delivery.addressSnapshot?.deliveryAddress || order.deliveryAddress || "";
+  return { region, address, searchText: `${region} ${address}`.toLowerCase() };
+}
+
+function driverDeliveriesPage(data) {
+  const filter = state.deliveryRegion.trim().toLowerCase();
+  const ownDeliveries = (data.deliveries || []).filter((delivery) => delivery.driverId === state.user.id);
+  const waiting = (data.deliveries || [])
+    .filter((delivery) => delivery.status === "waiting")
+    .filter((delivery) => {
+      const address = deliveryAddress(deliveryOrder(data, delivery), delivery);
+      return Boolean(address.region.trim() && address.address.trim());
+    })
+    .filter((delivery) => !filter || deliveryAddress(deliveryOrder(data, delivery), delivery).searchText.includes(filter));
+  const delivering = ownDeliveries.filter((delivery) => delivery.status === "delivering");
+  const delivered = ownDeliveries.filter((delivery) => delivery.status === "delivered");
+  const legacy = ownDeliveries.filter((delivery) => delivery.status === "legacy_shipped");
+  const waitingRows = waiting.map((delivery) => {
+    const order = deliveryOrder(data, delivery);
+    const address = deliveryAddress(order, delivery);
+    return `<tr><td><input type="checkbox" data-delivery-select="${escapeHtml(order.id)}" aria-label="选择订单 ${escapeHtml(order.orderNo || order.id)}" /></td><td><strong>${escapeHtml(order.orderNo || order.id)}</strong><br><span class="muted">${escapeHtml(order.productName || "")}</span></td><td>${escapeHtml(address.region || "地址待补全")}<br>${escapeHtml(address.address)}</td><td>${deliveryStatusBadge(delivery.status)}</td></tr>`;
+  }).join("");
+  const activeCards = delivering.map((delivery) => {
+    const order = deliveryOrder(data, delivery);
+    const address = deliveryAddress(order, delivery);
+    return `<article class="delivery-card"><div class="delivery-card-head"><div><strong>${escapeHtml(order.orderNo || order.id)}</strong><span>${escapeHtml(order.productName || "")}</span></div>${deliveryStatusBadge("delivering")}</div><p>${escapeHtml(address.region || "地址待补全")} ${escapeHtml(address.address)}</p><div class="delivery-proof-form"><label class="field"><span>送达照片（1～3 张）</span><input id="deliveryPhotos_${escapeHtml(order.id)}" type="file" accept="image/*" multiple /></label><label class="field"><span>送达备注（选填）</span><textarea id="deliveryNote_${escapeHtml(order.id)}" placeholder="例如：客户本人签收"></textarea></label></div><div class="delivery-actions"><button class="btn secondary compact" data-release-delivery="${escapeHtml(order.id)}">退回待配送</button><button class="btn compact" data-complete-delivery="${escapeHtml(order.id)}">确认送达</button></div></article>`;
+  }).join("");
+  const deliveredRows = delivered.map((delivery) => {
+    const order = deliveryOrder(data, delivery);
+    const proofs = (delivery.proofAttachmentIds || []).map((attachmentId) => data.attachments.find((attachment) => attachment.id === attachmentId)).filter(Boolean);
+    return `<tr><td>${escapeHtml(order.orderNo || order.id)}</td><td>${deliveryStatusBadge(delivery.status)}</td><td>${escapeHtml(formatDateTime(delivery.deliveredAt || ""))}</td><td>${deliveryProofButton(proofs, order)}</td><td>${escapeHtml(delivery.note || "-")}</td></tr>`;
+  }).join("");
+  const legacyRows = legacy.map((delivery) => {
+    const order = deliveryOrder(data, delivery);
+    return `<tr><td>${escapeHtml(order.orderNo || order.id)}</td><td>${deliveryStatusBadge(delivery.status)}</td><td>${escapeHtml(formatDateTime(delivery.startedAt || ""))}</td></tr>`;
+  }).join("");
+  return `
+    <div class="topbar"><h2>配送任务</h2><button class="btn secondary" data-action="refresh">刷新</button></div>
+    <section class="panel delivery-section">
+      <div class="delivery-section-head"><div><h3>待配送平台单</h3><p class="muted">可按地区或地址筛选，并一次领取多个订单。</p></div><div class="delivery-filter"><input id="deliveryRegion" value="${escapeHtml(state.deliveryRegion)}" placeholder="输入地区或地址" /><button class="btn secondary compact" data-filter-deliveries>筛选</button></div></div>
+      <div class="table-wrap"><table class="delivery-waiting-table"><thead><tr><th>选择</th><th>订单</th><th>配送地址</th><th>状态</th></tr></thead><tbody>${waitingRows || `<tr><td colspan="4" class="muted">暂无符合条件的待配送订单</td></tr>`}</tbody></table></div>
+      <div class="delivery-start"><span>共 ${waiting.length} 个待配送订单</span><button class="btn" data-start-delivery-trip>开始配送所选订单</button></div>
+    </section>
+    <section class="panel delivery-section"><h3>配送中</h3><div class="delivery-card-list">${activeCards || `<p class="muted">暂无配送中的订单</p>`}</div></section>
+    <section class="panel delivery-section"><h3>已送达记录</h3><div class="table-wrap"><table><thead><tr><th>订单</th><th>状态</th><th>送达时间</th><th>送达凭证</th><th>备注</th></tr></thead><tbody>${deliveredRows || `<tr><td colspan="5" class="muted">暂无已送达记录</td></tr>`}</tbody></table></div></section>
+    ${legacyRows ? `<section class="panel delivery-section"><h3>旧配送记录</h3><p class="muted">历史发货状态尚未确认送达，仅供查看。</p><div class="table-wrap"><table><thead><tr><th>订单</th><th>状态</th><th>发货时间</th></tr></thead><tbody>${legacyRows}</tbody></table></div></section>` : ""}
+  `;
+}
+
+async function startDriverDeliveryTrip(orderIds) {
+  const selected = [...new Set(orderIds.map(String).filter(Boolean))];
+  if (!selected.length) return toast("请至少选择一个待配送订单");
+  try {
+    await api("/api/delivery-trips/start", { method: "POST", body: JSON.stringify({ orderIds: selected }) });
+    toast(`已开始配送 ${selected.length} 个订单`);
+    await refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function completeDriverDelivery(orderId, files, note) {
+  const selected = Array.from(files || []);
+  if (selected.length < 1 || selected.length > 3) return toast("请上传 1 至 3 张送达照片");
+  try {
+    const photos = [];
+    for (const file of selected) photos.push({ name: file.name || "送达照片.jpg", dataUrl: await fileToDataUrl(file) });
+    await api("/api/deliveries/complete", { method: "POST", body: JSON.stringify({ orderId, photos, note: String(note || "").trim() }) });
+    toast("送达信息已提交");
+    await refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function adminNavigation(permissions, pureDriver) {
+  if (pureDriver) return [["deliveries", "配送任务"]];
   const views = [
     ["dashboard", "生产总览"],
     ["customers", "客户资料"],
     ["dispatch", "派工路线"],
     ["exceptions", "质检详情"],
-    ["history", "历史查询"],
-    ["reports", "基础报表"],
-    ["settings", "基础设置"],
   ];
-  if (pureDriver) views.splice(0, views.length, ["deliveries", "配送任务"]);
-  if (data.permissions?.manageCustomerFeedback) views.splice(5, 0, ["customerFeedback", "客户反馈"]);
-  if (data.permissions?.viewAuditLogs) views.splice(views.length - 1, 0, ["auditLogs", "操作日志"]);
-  if (!pureDriver && data.permissions?.manageDeliveries) views.splice(3, 0, ["deliveries", "配送管理"]);
-  const content = {
-    dashboard: dashboard(data),
-    customers: customersPage(data),
-    ordersAll: ordersPage(data, "all"),
-    ordersFactory: ordersPage(data, "factory"),
-    ordersPlatform: ordersPage(data, "platform"),
-    dispatch: dispatchPage(data),
-    exceptions: exceptionsPage(data),
-    customerFeedback: data.permissions?.manageCustomerFeedback ? customerFeedbackPage(data) : dashboard(data),
-    history: historyPage(data),
-    reports: reportsPage(data),
-    auditLogs: auditLogsPage(data),
-    settings: settingsPage(data),
-    deliveries: deliveriesPage(data),
-    mobile: mobileShell(true),
-  }[state.view];
-  const pendingPlatformCount = data.workOrders.filter((workOrder) => workOrder.creationStatus === "pending" && orderSource(workOrder).origin === "platform").length;
-  const pendingPlatformBadge = pendingPlatformCount ? `<b class="nav-count">${pendingPlatformCount}</b>` : "";
-  const ordersNav = pureDriver ? "" : `<div class="nav-group"><div class="nav-group-title"><span>订单工单</span>${pendingPlatformBadge}</div><div class="nav-group-items"><button type="button" class="${state.view === "ordersAll" ? "active" : ""}" data-view="ordersAll">全部订单</button><button type="button" class="${state.view === "ordersFactory" ? "active" : ""}" data-view="ordersFactory">工厂单</button><button type="button" class="${state.view === "ordersPlatform" ? "active" : ""}" data-view="ordersPlatform">平台单${pendingPlatformBadge}</button></div></div>`;
+  if (permissions?.manageDeliveries) views.push(["deliveries", "配送管理"]);
+  if (permissions?.manageCustomerFeedback) views.push(["customerFeedback", "客户反馈"]);
+  views.push(["history", "历史查询"], ["reports", "基础报表"]);
+  if (permissions?.viewAuditLogs) views.push(["auditLogs", "操作日志"]);
+  views.push(["settings", "基础设置"]);
+  return views;
+}
+
+function adminShell() {
+  const data = state.data;
+  const pureDriver = userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver";
+  const views = adminNavigation(data.permissions, pureDriver);
+  const pages = {
+    dashboard: () => dashboard(data),
+    customers: () => customersPage(data),
+    ordersAll: () => ordersPage(data, "all"),
+    ordersFactory: () => ordersPage(data, "factory"),
+    ordersPlatform: () => ordersPage(data, "platform"),
+    dispatch: () => dispatchPage(data),
+    exceptions: () => exceptionsPage(data),
+    customerFeedback: () => data.permissions?.manageCustomerFeedback ? customerFeedbackPage(data) : dashboard(data),
+    history: () => historyPage(data),
+    reports: () => reportsPage(data),
+    auditLogs: () => auditLogsPage(data),
+    settings: () => settingsPage(data),
+    deliveries: () => deliveriesPage(data),
+    mobile: () => mobileShell(true),
+  };
+  const content = (pages[state.view] || pages.dashboard)();
+  const ordersNav = ordersNavigation(data, pureDriver);
   return `
     <div class="app-shell">
       <aside class="side">
@@ -1568,6 +1881,16 @@ function bindLogin() {
 }
 
 function bindEvents() {
+  const financialInputPairs = [
+    ["quantity", "unitPrice", "totalAmount"],
+    ["editQuantity", "editUnitPrice", "editTotalAmount"],
+  ];
+  financialInputPairs.forEach(([quantityId, priceId, totalId]) => {
+    [quantityId, priceId].forEach((inputId) => {
+      const input = el(inputId);
+      if (input) input.oninput = () => updateFinancialTotal(quantityId, priceId, totalId);
+    });
+  });
   document.querySelectorAll("[data-view]").forEach((btn) => {
     btn.onclick = async () => {
       state.view = btn.dataset.view;
@@ -1665,9 +1988,23 @@ function bindEvents() {
   document.querySelectorAll("[data-confirm-platform-order]").forEach((btn) => {
     btn.onclick = () => { state.confirmingPlatformOrderId = btn.dataset.confirmPlatformOrder; render(); };
   });
+  const deliveryRegion = el("deliveryRegion");
+  const applyDeliveryFilter = () => {
+    state.deliveryRegion = deliveryRegion?.value.trim() || "";
+    render();
+  };
+  document.querySelectorAll("[data-filter-deliveries]").forEach((btn) => { btn.onclick = applyDeliveryFilter; });
+  if (deliveryRegion) deliveryRegion.onkeydown = (event) => { if (event.key === "Enter") applyDeliveryFilter(); };
+  document.querySelectorAll("[data-start-delivery-trip]").forEach((btn) => {
+    btn.onclick = () => startDriverDeliveryTrip([...document.querySelectorAll("[data-delivery-select]:checked")].map((input) => input.dataset.deliverySelect));
+  });
+  document.querySelectorAll("[data-complete-delivery]").forEach((btn) => {
+    btn.onclick = () => completeDriverDelivery(btn.dataset.completeDelivery, el(`deliveryPhotos_${btn.dataset.completeDelivery}`)?.files, el(`deliveryNote_${btn.dataset.completeDelivery}`)?.value || "");
+  });
   document.querySelectorAll("[data-release-delivery]").forEach((btn) => {
     btn.onclick = async () => {
-      const reason = window.prompt("退回原因（管理者纠正已送达状态时必填）", "");
+      const pureDriver = userRoles(state.user).length === 1 && userRoles(state.user)[0] === "driver";
+      const reason = pureDriver ? "" : window.prompt("退回原因（管理者纠正已送达状态时必填）", "");
       if (reason === null) return;
       try {
         await api("/api/deliveries/release", { method: "POST", body: JSON.stringify({ orderId: btn.dataset.releaseDelivery, reason: reason.trim() }) });
@@ -1679,7 +2016,18 @@ function bindEvents() {
     };
   });
   document.querySelectorAll("[data-dashboard-source]").forEach((btn) => {
-    btn.onclick = () => { state.dashboardSource = btn.dataset.dashboardSource; render(); };
+    btn.onclick = () => { state.dashboardSource = btn.dataset.dashboardSource; state.dashboardInsight = null; render(); };
+  });
+  const dashboardProcess = el("dashboardProcess");
+  if (dashboardProcess) dashboardProcess.onchange = () => { state.dashboardProcess = dashboardProcess.value; state.dashboardInsight = null; render(); };
+  document.querySelectorAll("[data-insight-days]").forEach((btn) => {
+    btn.onclick = () => { state.dashboardInsightDays = Number(btn.dataset.insightDays); state.dashboardInsight = null; render(); };
+  });
+  document.querySelectorAll("[data-insight-kind]").forEach((btn) => {
+    btn.onclick = () => {
+      state.dashboardInsight = { kind: btn.dataset.insightKind, processName: btn.dataset.insightProcess, segment: btn.dataset.insightSegment };
+      render();
+    };
   });
   const orderSourceChannel = el("orderSourceChannel");
   if (orderSourceChannel) orderSourceChannel.onchange = () => { state.orderSourceChannel = orderSourceChannel.value; render(); };
@@ -1937,7 +2285,7 @@ async function handleAction(action) {
   if (action === "saveRepeatOrder") await saveRepeatOrder();
   if (action === "openFinishedHistory") {
     state.view = "history";
-    state.historyFilters = { dateType: "completedAt", from: state.dashboardFinishedFrom, to: state.dashboardFinishedTo, customerId: "", status: "", source: "", sourceChannel: "" };
+    state.historyFilters = { dateType: "completedAt", from: state.dashboardFinishedFrom, to: state.dashboardFinishedTo, customerId: "", status: "", source: "", sourceChannel: "", workNo: "" };
     await searchHistory(true);
   }
   if (action === "saveOrderEdit") await saveOrderEdit();
@@ -1969,6 +2317,7 @@ async function handleAction(action) {
           weightKg: el("weightKg").value.trim(),
           quantity: el("quantity").value,
           quantityUnit: el("quantityUnit").value,
+          ...(state.data?.permissions?.viewOrderFinancials ? { unitPrice: el("unitPrice").value } : {}),
           dueDate: normalizeDateInput(el("dueDate").value),
           priority: el("priority").value,
           processIds,
@@ -2094,7 +2443,7 @@ function buildReportsCsv(data) {
       r.plannedStartDate || "",
       r.plannedEndDate || "",
       r.reportDate || String(r.createdAt || "").slice(0, 10),
-      r.scheduleStatus === "on_time" ? "计划内" : r.scheduleStatus === "outside_plan" ? "计划外" : "未排期",
+      ["on_time", "early"].includes(r.scheduleStatus) ? "计划内" : r.scheduleStatus === "outside_plan" ? "计划外" : "未排期",
       r.scheduleReason || "",
       r.note || "",
     ]);
@@ -2207,6 +2556,7 @@ async function saveOrderEdit() {
         drawingNo: el("editDrawingNo").value.trim(),
         quantity: el("editQuantity").value,
         quantityUnit: el("editQuantityUnit").value,
+        ...(state.data?.permissions?.viewOrderFinancials ? { unitPrice: el("editUnitPrice").value } : {}),
         weightKg: el("editWeightKg").value.trim(),
         dueDate: el("editDueDate").value,
         priority: el("editPriority").value,
@@ -2228,12 +2578,18 @@ async function submitPlatformConfirm() {
   const orderId = state.confirmingPlatformOrderId;
   const processIds = [...document.querySelectorAll('input[name="confirmProcess"]:checked')].map((input) => input.value);
   if (!processIds.length) return toast("至少选择一道工序");
+  if (!el("confirmProductName").value.trim()) return toast("请填写产品名称");
   try {
+    const drawingIds = await uploadDrawingFiles(el("confirmDrawingFiles")?.files);
     await api("/api/platform-orders/confirm", { method: "POST", body: JSON.stringify({
       orderId,
       processIds,
       productName: el("confirmProductName").value.trim(),
+      drawingNo: el("confirmDrawingNo").value.trim(),
       quantity: Number(el("confirmQuantity").value),
+      quantityUnit: el("confirmQuantityUnit").value,
+      weightKg: el("confirmWeightKg").value.trim(),
+      drawingIds,
       dueDate: el("confirmDueDate").value,
       priority: el("confirmPriority").value,
       region: el("confirmRegion").value.trim(),
@@ -2376,6 +2732,7 @@ async function searchHistory(useState = false) {
       status: el("historyStatus")?.value || "",
       source: el("historySource")?.value || "",
       sourceChannel: el("historySourceChannel")?.value || "",
+      workNo: el("historyWorkNo")?.value.trim() || "",
     };
     const query = Object.entries({
       from: state.historyFilters.from,
@@ -2385,6 +2742,7 @@ async function searchHistory(useState = false) {
       status: state.historyFilters.status,
       source: state.historyFilters.source,
       sourceChannel: state.historyFilters.sourceChannel,
+      workNo: state.historyFilters.workNo,
     })
       .filter(([, value]) => value)
       .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)

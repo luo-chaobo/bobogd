@@ -13,6 +13,7 @@ function seedDatabase() {
   fs.mkdirSync(path.join(tempRoot, "data"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "public", "uploads", "drawings"), { recursive: true });
   fs.mkdirSync(path.join(tempRoot, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(root, "lib", "order-financials.js"), path.join(tempRoot, "lib", "order-financials.js"));
   fs.mkdirSync(path.join(tempRoot, "public", "vendor", "pdfjs"), { recursive: true });
   fs.copyFileSync(path.join(root, "server.js"), path.join(tempRoot, "server.js"));
   fs.copyFileSync(path.join(root, "lib", "weapp-image.js"), path.join(tempRoot, "lib", "weapp-image.js"));
@@ -66,13 +67,16 @@ async function run() {
 
   const anonymous = await (await request("/api/tv-dashboard")).json();
   assert.strictEqual(anonymous.activeOrders[0].drawings, undefined, "普通电视接口不能返回图纸元数据");
+  assert.strictEqual(anonymous.activeOrders[0].drawingCount, 1);
 
   const tokenResponse = await request("/api/tv-viewer-token", { headers: { "x-user-id": "worker" } });
   assert.strictEqual(tokenResponse.status, 200);
   const { token } = await tokenResponse.json();
   const interactive = await (await request(`/api/tv-dashboard?viewerToken=${encodeURIComponent(token)}`)).json();
-  assert.deepStrictEqual(interactive.activeOrders[0].drawings.map((item) => item.id), ["drawing"]);
-  assert.ok(!interactive.activeOrders[0].drawings[0].url, "看板接口不能暴露公开原文件地址");
+  assert.strictEqual(interactive.activeOrders[0].drawings, undefined, "首屏不能返回图纸元数据");
+  const drawingList = await (await request(`/api/tv-orders/work/drawings?viewerToken=${encodeURIComponent(token)}`)).json();
+  assert.deepStrictEqual(drawingList.items.map((item) => item.id), ["drawing"]);
+  assert.ok(!drawingList.items[0].url, "看板接口不能暴露公开原文件地址");
 
   const validFile = await request(`/api/tv-drawings/drawing/file?viewerToken=${encodeURIComponent(token)}`);
   assert.strictEqual(validFile.status, 200);
