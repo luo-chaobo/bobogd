@@ -45,7 +45,12 @@ const state = {
   dashboardFinishedTo: isoDate(0),
   dashboardProcess: "",
   dashboardInsightDays: 30,
+  dashboardTrendDetail: null,
   dashboardInsight: null,
+  dashboardInsightOrder: null,
+  dashboardInsightLoading: false,
+  dashboardInsightError: "",
+  dashboardInsightRequest: 0,
   historyDetailId: "",
   historyOrderId: "",
   repeatOrderMode: false,
@@ -575,18 +580,149 @@ function scheduleInsightData(data, now, days) {
   });
 }
 
-function dashboardInsightDetails(insights) {
+function dashboardInsightModal(insights) {
   const selection = state.dashboardInsight;
-  if (!selection) return `<section class="panel insight-details"><h3>工序明细</h3><p class="muted">点击图表查看工序明细</p></section>`;
+  if (!selection) return "";
   const process = insights.find((item) => item.name === selection.processName);
   const rows = selection.kind === "risk" ? process?.risk[selection.segment]
     : selection.kind === "unstarted" ? process?.unstarted : process?.[selection.segment];
   const titles = { overdue: "已超期", urgent: "48 小时内到期", normal: "正常", unplanned: "未排期", unstarted: "未开工超期", onTime: "计划内完工", late: "计划外完工" };
   const title = `${selection.processName} · ${titles[selection.segment] || "工序明细"}`;
-  return `<section class="panel insight-details"><div class="section-heading"><h3>${escapeHtml(title)}</h3><span class="muted">${rows?.length || 0} 条工序</span></div>
-    <div class="table-wrap"><table><thead><tr><th>工单</th><th>工序状态</th><th>计划开始</th><th>计划结束</th><th>完成时间</th></tr></thead><tbody>
-    ${rows?.length ? rows.map((route) => `<tr><td>${escapeHtml(route.workOrder.workNo || route.workOrder.id)}</td><td>${escapeHtml(route.status)}</td><td>${escapeHtml(route.plannedStartDate || "未设置")}</td><td>${escapeHtml(route.plannedEndDate || "未设置")}</td><td>${escapeHtml(formatDateTime(route.completedAt || route.lastReportedAt || ""))}</td></tr>`).join("") : `<tr><td colspan="5" class="muted">当前筛选下暂无工序</td></tr>`}
-    </tbody></table></div></section>`;
+  const item = state.dashboardInsightOrder;
+  const details = item ? `<div class="dashboard-order-details">
+    <div class="form-grid history-order-fields">
+      <div class="field"><span>订单号</span><div class="readonly-value">${escapeHtml(item.orderNo || "")}</div></div><div class="field"><span>客户</span><div class="readonly-value">${escapeHtml(item.customerName || "")}</div></div>
+      <div class="field"><span>产品名称</span><div class="readonly-value">${escapeHtml(item.productName || "")}</div></div><div class="field"><span>激光编号</span><div class="readonly-value">${escapeHtml(item.drawingNo || "")}</div></div>
+      <div class="field"><span>数量</span><div class="readonly-value">${escapeHtml(item.planQty)} ${escapeHtml(quantityUnit(item.quantityUnit))}</div></div><div class="field"><span>交期</span><div class="readonly-value">${escapeHtml(item.dueDate || "")}</div></div>
+      <div class="field"><span>优先级</span><div class="readonly-value">${escapeHtml(item.priority || "普通")}</div></div><div class="field"><span>重量（KG）</span><div class="readonly-value">${escapeHtml(item.weightKg ?? "")}</div></div>
+      <div class="field wide"><span>工序路线</span><div class="history-route-list">${(item.routes || []).filter((route) => route.routeType !== "rework").sort((a, b) => a.sequence - b.sequence).map((route) => `<div class="history-route-item"><strong>${escapeHtml(route.sequence)}. ${escapeHtml(route.processName)}</strong>${tag(route.status)}<span>${escapeHtml(route.completedQty || 0)} / ${escapeHtml(route.planQty || item.planQty)} ${escapeHtml(quantityUnit(item.quantityUnit))}</span></div>`).join("") || `<span class="muted">无正式工序</span>`}</div></div>
+      <div class="field wide"><span>备注</span><div class="readonly-value dashboard-order-note">${escapeHtml(item.note || "")}</div></div>
+    </div>
+    <div class="history-order-attachments"><span class="attachment-field-title">图纸附件 ${attachmentGroupButton(item.drawings || [], `${item.workNo} ${item.productName}`)}</span></div>
+  </div>` : state.dashboardInsightLoading ? `<p class="muted">正在加载订单详情…</p>` : state.dashboardInsightError ? `<p class="dashboard-insight-error" role="alert">${escapeHtml(state.dashboardInsightError)}</p>` : "";
+  return `<div class="dialog-backdrop dashboard-insight-backdrop" data-action="closeDashboardInsight"><section class="dialog dashboard-insight-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboardInsightTitle" onclick="event.stopPropagation()">
+    <div class="topbar"><div><h3 id="dashboardInsightTitle">${item || state.dashboardInsightLoading || state.dashboardInsightError ? "订单详情" : escapeHtml(title)}</h3>${item ? `<p>${orderSourceBadge(item)}</p><p class="muted">原工单：${escapeHtml(item.workNo)} / 原订单：${escapeHtml(item.orderNo)} / 状态：${escapeHtml(item.productionStatus)}${item.completedAt ? ` / 完工：${escapeHtml(formatDateTime(item.completedAt))}` : ""}</p>` : state.dashboardInsightLoading || state.dashboardInsightError ? "" : `<p class="muted">${rows?.length || 0} 条工序</p>`}</div><button class="btn secondary compact" data-action="closeDashboardInsight">关闭</button></div>
+    ${item || state.dashboardInsightLoading || state.dashboardInsightError ? `<div class="actions dashboard-insight-nav"><button class="btn secondary" data-action="backDashboardInsight">返回清单</button></div>${details}` : `<div class="table-wrap"><table><thead><tr><th>工单</th><th>工序状态</th><th>计划开始</th><th>计划结束</th><th>完成时间</th></tr></thead><tbody>
+      ${rows?.length ? rows.map((route) => `<tr><td><button type="button" class="history-order-link" data-dashboard-insight-order="${escapeHtml(route.workOrder.id)}">${escapeHtml(route.workOrder.workNo || route.workOrder.id)}</button></td><td>${escapeHtml(route.status)}</td><td>${escapeHtml(route.plannedStartDate || "未设置")}</td><td>${escapeHtml(route.plannedEndDate || "未设置")}</td><td>${escapeHtml(formatDateTime(route.completedAt || route.lastReportedAt || ""))}</td></tr>`).join("") : `<tr><td colspan="5" class="muted">当前筛选下暂无工序</td></tr>`}
+    </tbody></table></div>`}
+  </section></div>`;
+}
+
+function dashboardTrendData(data, days = state.dashboardInsightDays) {
+  const todayKey = shanghaiDateKey(new Date());
+  const [year, month, day] = todayKey.split("-").map(Number);
+  const fromKey = new Date(Date.UTC(year, month - 1, day - days + 1)).toISOString().slice(0, 10);
+  const dateKeys = Array.from({ length: days }, (_, index) => {
+    const date = new Date(Date.UTC(year, month - 1, day - days + 1 + index));
+    return date.toISOString().slice(0, 10);
+  });
+  const ordersByDate = new Map(dateKeys.map((date) => [date, []]));
+  const reportsByDate = new Map(dateKeys.map((date) => [date, []]));
+  const sourceOrders = (data.orders || []).filter((order) => state.dashboardSource === "all" || orderSource(order).origin === state.dashboardSource);
+  const customers = new Map((data.customers || []).map((customer) => [customer.id, customer]));
+  const workOrdersByOrder = new Map();
+  for (const workOrder of data.workOrders || []) {
+    if (!workOrdersByOrder.has(workOrder.orderId)) workOrdersByOrder.set(workOrder.orderId, workOrder);
+  }
+  for (const order of sourceOrders) {
+    const date = shanghaiDateKey(order.createdAt);
+    if (date >= fromKey && ordersByDate.has(date)) {
+      const workOrder = workOrdersByOrder.get(order.id);
+      ordersByDate.get(date).push({
+        ...order,
+        customerName: order.externalCustomer || customers.get(order.customerId)?.name || workOrder?.customer?.name || "未知客户",
+        productDisplayName: order.productName || order.material || order.externalDescription || workOrder?.productName || "",
+      });
+    }
+  }
+  const routesById = new Map((data.routes || []).map((route) => [route.id, route]));
+  const sourceWorkOrderIds = new Set(filterWorkOrdersBySource(data.workOrders || [], state.dashboardSource === "all" ? "" : state.dashboardSource, "").map((workOrder) => workOrder.id));
+  for (const report of data.reports || []) {
+    if (report.reportType === "quality" || !sourceWorkOrderIds.has(report.workOrderId)) continue;
+    const route = routesById.get(report.routeId);
+    if (!route || route.processName === "质检") continue;
+    const date = shanghaiDateKey(report.createdAt);
+    if (!reportsByDate.has(date)) continue;
+    reportsByDate.get(date).push({
+      processName: route.processName || "未知工序",
+      reporterId: report.reporterId || "",
+      reporterName: userNameText(data, report.reporterId) || "未知员工",
+    });
+  }
+  return dateKeys.map((date) => ({
+    date,
+    orders: ordersByDate.get(date),
+    orderCount: ordersByDate.get(date).length,
+    reports: reportsByDate.get(date),
+    reportCount: reportsByDate.get(date).length,
+  }));
+}
+
+function trendLineChart(title, values, type, series) {
+  const width = 920;
+  const height = 280;
+  const left = 44;
+  const right = 18;
+  const top = 30;
+  const bottom = 226;
+  const maxValue = Math.max(1, ...values.flatMap((item) => series.map((entry) => Number(item[entry.key] || 0))));
+  const x = (index) => left + (values.length === 1 ? 0 : index * (width - left - right) / (values.length - 1));
+  const y = (value) => bottom - value / maxValue * (bottom - top);
+  const labelStep = Math.max(1, Math.ceil(values.length / 7));
+  const valueLabelStep = Math.max(1, Math.ceil(values.length / 15));
+  const axisLabel = type === "reports" ? "报工总次数" : "订单数";
+  const pointHelp = type === "reports" ? "点击日期节点查看各工种和员工的报工次数" : "点击日期节点查看当天新增订单";
+  return `<section class="panel trend-panel"><div class="section-heading"><div><h3>${escapeHtml(title)}</h3><p class="muted">${pointHelp}；纵轴为${axisLabel}</p><div class="trend-legend">${series.map((entry) => `<span><i style="background:${entry.color}"></i>${escapeHtml(entry.label)}</span>`).join("")}</div></div></div>
+    <div class="trend-chart-wrap"><svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="group" aria-label="${escapeHtml(title)}趋势折线图">
+      ${[0, 0.5, 1].map((ratio) => { const gridY = bottom - ratio * (bottom - top); return `<line class="trend-gridline" x1="${left}" y1="${gridY}" x2="${width - right}" y2="${gridY}"></line><text class="trend-axis-value" x="${left - 8}" y="${gridY + 4}" text-anchor="end">${Math.round(maxValue * ratio)}</text>`; }).join("")}
+      ${series.map((entry) => `<path class="trend-line" style="stroke:${entry.color}" d="${values.map((item, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(1)} ${y(Number(item[entry.key] || 0)).toFixed(1)}`).join(" ")}"></path>`).join("")}
+      ${values.map((item, index) => {
+        const dateLabel = item.date.slice(5);
+        const points = series.map((entry) => {
+          const value = Number(item[entry.key] || 0);
+          const showValue = index % valueLabelStep === 0 || index === values.length - 1;
+          return `<g class="trend-point ${showValue ? "has-label" : ""}" role="button" tabindex="0" aria-label="${escapeHtml(item.date)}，${escapeHtml(entry.label)} ${value}，点击查看明细" data-trend-point="${type}" data-trend-date="${item.date}"><title>${escapeHtml(item.date)}：${escapeHtml(entry.label)} ${value}</title><circle style="fill:${entry.color}" cx="${x(index).toFixed(1)}" cy="${y(value).toFixed(1)}" r="5"></circle><text class="trend-point-value" x="${x(index).toFixed(1)}" y="${y(value) - 11}" text-anchor="middle">${value}</text></g>`;
+        }).join("");
+        return `${points}${index % labelStep === 0 || index === values.length - 1 ? `<text class="trend-date-label" x="${x(index).toFixed(1)}" y="${bottom + 24}" text-anchor="middle">${dateLabel}</text>` : ""}`;
+      }).join("")}
+    </svg></div></section>`;
+}
+
+function dashboardTrendModal(data) {
+  const selection = state.dashboardTrendDetail;
+  if (!selection) return "";
+  const point = dashboardTrendData(data).find((item) => item.date === selection.date);
+  if (!point) return "";
+  const orders = selection.type === "orders" ? point.orders : [];
+  const totals = new Map();
+  if (selection.type === "reports") {
+    for (const report of point.reports) {
+      const key = `${report.processName}\u0000${report.reporterId || report.reporterName}`;
+      const current = totals.get(key) || { processName: report.processName, reporterName: report.reporterName, reportCount: 0 };
+      current.reportCount += 1;
+      totals.set(key, current);
+    }
+  }
+  const reportRows = [...totals.values()].sort((a, b) => {
+    const processOrder = (name) => {
+      const index = techProcessNames.indexOf(name);
+      return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+    };
+    return processOrder(a.processName) - processOrder(b.processName)
+      || a.processName.localeCompare(b.processName, "zh-CN")
+      || a.reporterName.localeCompare(b.reporterName, "zh-CN");
+  });
+  const reportGroups = [];
+  for (const row of reportRows) {
+    const lastGroup = reportGroups[reportGroups.length - 1];
+    if (lastGroup?.processName === row.processName) lastGroup.rows.push(row);
+    else reportGroups.push({ processName: row.processName, rows: [row] });
+  }
+  const isOrders = selection.type === "orders";
+  return `<div class="dialog-backdrop trend-detail-backdrop" data-action="closeDashboardTrend"><section class="dialog trend-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="trendDetailTitle" onclick="event.stopPropagation()">
+    <div class="topbar"><div><h3 id="trendDetailTitle">${isOrders ? "新增订单" : "工序报工汇总"} · ${escapeHtml(selection.date)}</h3><p class="muted">${isOrders ? `${orders.length} 个订单` : `共 ${point.reports.length} 次生产报工；质检报工不计入`}</p></div><button type="button" class="btn secondary compact" data-action="closeDashboardTrend">关闭</button></div>
+    ${isOrders ? `<div class="table-wrap"><table><thead><tr><th>订单号</th><th>客户</th><th>产品</th><th>数量</th><th>来源</th><th>创建时间</th></tr></thead><tbody>${orders.length ? orders.map((order) => `<tr><td>${escapeHtml(order.orderNo || order.externalOrderNumber || order.id)}</td><td>${escapeHtml(order.customerName)}</td><td>${escapeHtml(order.productDisplayName)}</td><td>${escapeHtml(order.quantity ?? order.externalQuantity ?? "")} ${escapeHtml(quantityUnit(order.quantityUnit))}</td><td>${escapeHtml(orderSource(order).originLabel)}</td><td>${escapeHtml(formatDateTime(order.createdAt))}</td></tr>`).join("") : `<tr><td colspan="6" class="muted">当天没有新增订单</td></tr>`}</tbody></table></div>` : `<div class="table-wrap"><table><thead><tr><th>工种</th><th>员工</th><th>报工次数</th></tr></thead><tbody>${reportGroups.length ? reportGroups.map((group) => group.rows.map((row, index) => `<tr>${index === 0 ? `<td rowspan="${group.rows.length}">${escapeHtml(group.processName)}</td>` : ""}<td>${escapeHtml(row.reporterName)}</td><td>${row.reportCount}</td></tr>`).join("")).join("") : `<tr><td colspan="3" class="muted">当天没有生产报工</td></tr>`}</tbody></table></div>`}
+  </section></div>`;
 }
 
 function scheduleInsightCharts(insights) {
@@ -606,7 +742,7 @@ function scheduleInsightCharts(insights) {
     <section class="panel insight-panel"><div class="section-heading"><div><h3>未开工超期</h3><p class="muted">待开始且计划开始日早于今天；共 ${totalUnstarted} 条。</p></div></div>
       ${insights.map((item) => `<div class="insight-row"><strong>${escapeHtml(item.name)}</strong><div class="insight-track">${item.unstarted.length ? `<button type="button" class="insight-age-bar" style="width:${item.unstarted.length / maxUnstarted * 100}%" data-insight-kind="unstarted" data-insight-process="${escapeHtml(item.name)}" data-insight-segment="unstarted" title="查看${escapeHtml(item.name)}未开工工序">${item.unstarted.length}</button>` : `<span class="insight-empty-bar">0</span>`}</div></div>`).join("") || `<p class="muted">暂无工序数据</p>`}
     </section>
-    <section class="panel insight-panel"><div class="section-heading"><div><h3>计划内完工率</h3><p class="muted">近 ${state.dashboardInsightDays} 天已完工且设有完整计划区间的工序 ${totalCompleted} 条；未排期不计分母，提前或结束日当日完工计计划内，仅晚于结束日计计划外。</p></div><div class="insight-period">${[7, 30, 90].map((days) => `<button type="button" class="${state.dashboardInsightDays === days ? "active" : ""}" data-insight-days="${days}">${days}天</button>`).join("")}</div></div>
+    <section class="panel insight-panel"><div class="section-heading"><div><h3>计划内完工率</h3><p class="muted">近 ${state.dashboardInsightDays} 天已完工且设有完整计划区间的工序 ${totalCompleted} 条；未排期不计分母，提前或结束日当日完工计计划内，仅晚于结束日计计划外。</p></div></div>
       <div class="insight-legend"><span class="insight-key insight-on-time">计划内</span><span class="insight-key insight-late">计划外</span></div>
       ${insights.map((item) => {
         const count = item.onTime.length + item.late.length;
@@ -763,8 +899,6 @@ function dashboard(data) {
     .filter((workOrder) => workOrder.creationStatus !== "pending");
   const workOrderIds = new Set(workOrders.map((workOrder) => workOrder.id));
   const dashboardData = { ...data, workOrders, routes: data.routes.filter((route) => workOrderIds.has(route.workOrderId)) };
-  const insights = scheduleInsightData(dashboardData, new Date(), state.dashboardInsightDays)
-    .filter((item) => !state.dashboardProcess || item.name === state.dashboardProcess);
   const overdue = workOrders.filter((w) => w.overdue).length;
   const openExceptions = data.exceptions.filter((e) => e.status !== "已解决").length;
   const active = workOrders.filter((w) => w.status !== "已完成").length;
@@ -777,7 +911,7 @@ function dashboard(data) {
     ? '<button class="btn secondary" data-action="openDispatchBoard">派工看板</button>'
     : "";
   return `
-    <div class="topbar"><div><h2>生产总览</h2>${dashboardSourceTabs()}</div><div class="actions">${dispatchBoardButton}<button class="btn secondary" data-action="openMobileTv">手机横屏看板</button><button class="btn secondary" data-action="openTv">打开大屏看板</button><button class="btn secondary" data-action="refresh">刷新</button></div></div>
+    <div class="topbar"><div><div class="dashboard-heading"><h2>生产总览</h2><button type="button" class="chart-center-link" data-view="charts" aria-label="打开图表中心" title="图表中心"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h17M7 15l4-4 3 2 6-7"></path><circle cx="7" cy="15" r="1"></circle><circle cx="11" cy="11" r="1"></circle><circle cx="14" cy="13" r="1"></circle><circle cx="20" cy="6" r="1"></circle></svg></button></div>${dashboardSourceTabs()}</div><div class="actions">${dispatchBoardButton}<button class="btn secondary" data-action="openMobileTv">手机横屏看板</button><button class="btn secondary" data-action="openTv">打开大屏看板</button><button class="btn secondary" data-action="refresh">刷新</button></div></div>
     <section class="grid cols-4">
       <div class="card metric"><span>生产中工单</span><strong>${active}</strong></div>
       <div class="card metric finished-metric"><button type="button" class="metric-link" data-action="openFinishedHistory"><span>已完成工单</span><strong>${finished}</strong></button><div class="metric-date-range"><input id="dashboardFinishedFrom" type="date" value="${state.dashboardFinishedFrom}" aria-label="完成开始日期"><span>至</span><input id="dashboardFinishedTo" type="date" value="${state.dashboardFinishedTo}" aria-label="完成结束日期"></div></div>
@@ -790,11 +924,27 @@ function dashboard(data) {
         ${processLoadCards(dashboardData)}
       </div>
     </section>
-    <section class="insight-toolbar"><div><h3>排产诊断</h3><p class="muted">按工序查看排期风险和计划执行情况；点击图表可定位具体工单。</p></div><label>工序筛选 <select id="dashboardProcess"><option value="">全部工序</option>${dashboardProcesses(dashboardData).map((process) => `<option value="${escapeHtml(process.name)}" ${state.dashboardProcess === process.name ? "selected" : ""}>${escapeHtml(process.name)}</option>`).join("")}</select></label></section>
-    ${scheduleInsightCharts(insights)}
-    ${dashboardInsightDetails(insights)}
     ${workOrderTable(dashboardData, { productionBoard: true })}
   `;
+}
+
+function chartCenterPage(data) {
+  const workOrders = filterWorkOrdersBySource(data.workOrders, state.dashboardSource === "all" ? "" : state.dashboardSource, "")
+    .filter((workOrder) => workOrder.creationStatus !== "pending");
+  const workOrderIds = new Set(workOrders.map((workOrder) => workOrder.id));
+  const dashboardData = { ...data, workOrders, routes: data.routes.filter((route) => workOrderIds.has(route.workOrderId)) };
+  const insights = scheduleInsightData(dashboardData, new Date(), state.dashboardInsightDays)
+    .filter((item) => !state.dashboardProcess || item.name === state.dashboardProcess);
+  const trends = dashboardTrendData(data);
+  const reportTrendValues = trends.map((item) => ({ date: item.date, reportCount: item.reportCount }));
+  const trendRange = `<div class="insight-period" role="group" aria-label="图表统计范围">${[7, 30, 90].map((days) => `<button type="button" class="${state.dashboardInsightDays === days ? "active" : ""}" data-insight-days="${days}">近${days}天</button>`).join("")}</div>`;
+  return `<div class="topbar chart-center-topbar"><div><h2>图表中心</h2>${dashboardSourceTabs()}</div><div class="actions"><button type="button" class="btn secondary" data-view="dashboard">返回生产总览</button></div></div>
+    <section class="chart-center-toolbar"><div><strong>统计范围</strong>${trendRange}<span class="muted">按北京时间自然日统计，含今天</span></div></section>
+    <div class="daily-trend-grid">${trendLineChart("每日新增订单", trends.map((item) => ({ date: item.date, orders: item.orderCount })), "orders", [{ key: "orders", label: "订单数", color: "#2873a5" }])}${trendLineChart("每日报工总次数", reportTrendValues, "reports", [{ key: "reportCount", label: "报工总次数", color: "#118477" }])}</div>
+    <section class="insight-toolbar"><div><h3>排产诊断</h3><p class="muted">按工序查看排期风险和计划执行情况；点击有数据的色块查看工单清单。</p></div><label>工序筛选 <select id="dashboardProcess"><option value="">全部工序</option>${dashboardProcesses(dashboardData).map((process) => `<option value="${escapeHtml(process.name)}" ${state.dashboardProcess === process.name ? "selected" : ""}>${escapeHtml(process.name)}</option>`).join("")}</select></label></section>
+    ${scheduleInsightCharts(insights)}
+    ${dashboardInsightModal(insights)}
+    ${dashboardTrendModal(data)}`;
 }
 
 function visibleWorkOrders(data, options = {}) {
@@ -1544,6 +1694,7 @@ function adminShell() {
   const views = adminNavigation(data.permissions, pureDriver);
   const pages = {
     dashboard: () => dashboard(data),
+    charts: () => chartCenterPage(data),
     customers: () => customersPage(data),
     ordersAll: () => ordersPage(data, "all"),
     ordersFactory: () => ordersPage(data, "factory"),
@@ -2016,17 +2167,56 @@ function bindEvents() {
     };
   });
   document.querySelectorAll("[data-dashboard-source]").forEach((btn) => {
-    btn.onclick = () => { state.dashboardSource = btn.dataset.dashboardSource; state.dashboardInsight = null; render(); };
+    btn.onclick = () => { state.dashboardSource = btn.dataset.dashboardSource; state.dashboardInsight = null; state.dashboardInsightOrder = null; state.dashboardTrendDetail = null; render(); };
   });
   const dashboardProcess = el("dashboardProcess");
   if (dashboardProcess) dashboardProcess.onchange = () => { state.dashboardProcess = dashboardProcess.value; state.dashboardInsight = null; render(); };
   document.querySelectorAll("[data-insight-days]").forEach((btn) => {
-    btn.onclick = () => { state.dashboardInsightDays = Number(btn.dataset.insightDays); state.dashboardInsight = null; render(); };
+    btn.onclick = () => { state.dashboardInsightDays = Number(btn.dataset.insightDays); state.dashboardInsight = null; state.dashboardInsightOrder = null; state.dashboardTrendDetail = null; render(); };
   });
   document.querySelectorAll("[data-insight-kind]").forEach((btn) => {
     btn.onclick = () => {
       state.dashboardInsight = { kind: btn.dataset.insightKind, processName: btn.dataset.insightProcess, segment: btn.dataset.insightSegment };
+      state.dashboardInsightOrder = null;
+      state.dashboardInsightLoading = false;
+      state.dashboardInsightError = "";
+      state.dashboardInsightRequest += 1;
       render();
+    };
+  });
+  document.querySelectorAll("[data-dashboard-insight-order]").forEach((btn) => {
+    btn.onclick = async () => {
+      const requestId = ++state.dashboardInsightRequest;
+      state.dashboardInsightOrder = null;
+      state.dashboardInsightLoading = true;
+      state.dashboardInsightError = "";
+      render();
+      try {
+        const result = await api(`/api/history/work-orders?workOrderId=${encodeURIComponent(btn.dataset.dashboardInsightOrder)}`);
+        if (requestId !== state.dashboardInsightRequest) return;
+        state.dashboardInsightOrder = result.items?.[0] || null;
+        if (!state.dashboardInsightOrder) state.dashboardInsightError = "未找到该工单记录";
+      } catch (error) {
+        if (requestId !== state.dashboardInsightRequest) return;
+        state.dashboardInsightError = error.message || "订单详情加载失败";
+      } finally {
+        if (requestId !== state.dashboardInsightRequest) return;
+        state.dashboardInsightLoading = false;
+        render();
+      }
+    };
+  });
+  document.querySelectorAll("[data-trend-point]").forEach((point) => {
+    const openDetail = () => {
+      state.dashboardTrendDetail = { type: point.dataset.trendPoint, date: point.dataset.trendDate };
+      render();
+    };
+    point.onclick = openDetail;
+    point.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openDetail();
+      }
     };
   });
   const orderSourceChannel = el("orderSourceChannel");
@@ -2105,6 +2295,8 @@ function bindEvents() {
   document.onkeydown = (event) => {
     if (event.key !== "Escape") return;
     if (state.previewFiles.length) return closeFilePreview();
+    if (state.dashboardTrendDetail) { state.dashboardTrendDetail = null; return render(); }
+    if (state.dashboardInsight) { state.dashboardInsightRequest += 1; state.dashboardInsight = null; state.dashboardInsightOrder = null; state.dashboardInsightLoading = false; state.dashboardInsightError = ""; return render(); }
     if (state.historyDetailId) { state.historyDetailId = ""; return render(); }
     if (state.openFulfillmentOrderId) { state.openFulfillmentOrderId = ""; render(); }
   };
@@ -2275,6 +2467,9 @@ async function handleAction(action) {
   if (action === "closePlatformConfirm") { state.confirmingPlatformOrderId = ""; render(); }
   if (action === "submitPlatformConfirm") await submitPlatformConfirm();
   if (action === "closeHistoryDetail") { state.historyDetailId = ""; render(); }
+  if (action === "closeDashboardTrend") { state.dashboardTrendDetail = null; render(); }
+  if (action === "closeDashboardInsight") { state.dashboardInsightRequest += 1; state.dashboardInsight = null; state.dashboardInsightOrder = null; state.dashboardInsightLoading = false; state.dashboardInsightError = ""; render(); }
+  if (action === "backDashboardInsight") { state.dashboardInsightRequest += 1; state.dashboardInsightOrder = null; state.dashboardInsightLoading = false; state.dashboardInsightError = ""; render(); }
   if (action === "closeHistoryOrder") { state.historyOrderId = ""; state.repeatOrderMode = false; state.repeatOrderConfirmOpen = false; render(); }
   if (action === "enableRepeatOrder") {
     state.repeatOrderConfirmOpen = true;

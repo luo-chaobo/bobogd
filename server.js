@@ -1129,6 +1129,7 @@ function isDateInRange(value, from, to) {
 function historyFilters(url) {
   const dateType = String(url.searchParams.get("dateType") || "createdAt");
   return {
+    workOrderId: String(url.searchParams.get("workOrderId") || "").trim(),
     customerId: String(url.searchParams.get("customerId") || "").trim(),
     status: String(url.searchParams.get("status") || "").trim(),
     source: String(url.searchParams.get("source") || "").trim(),
@@ -1196,6 +1197,7 @@ function workOrderHistoryItems(db, filters, includeCustomerFeedbacks = false) {
         ...(includeCustomerFeedbacks ? { customerFeedbacks } : {}),
       };
     })
+    .filter((item) => !filters.workOrderId || item.id === filters.workOrderId)
     .filter((item) => !filters.customerId || item.customerId === filters.customerId)
     .filter((item) => !filters.status || item.status === filters.status)
     .filter((item) => !filters.source || item.orderOrigin === filters.source)
