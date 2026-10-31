@@ -1,0 +1,43 @@
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+
+const root = path.resolve(__dirname, "..");
+const tvSource = fs.readFileSync(path.join(root, "public", "tv.js"), "utf8");
+const tvStyles = fs.readFileSync(path.join(root, "public", "tv.css"), "utf8").replace(/\r\n/g, "\n");
+const appSource = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
+
+assert.ok(tvSource.includes("plannedRange"), "TV must render planned date ranges");
+assert.ok(tvSource.includes("mobilePlanText"), "Mobile board must render plan text independently");
+assert.ok(tvSource.includes("mobilePlanHidden"), "Mobile board must hide selected process plan text");
+assert.ok(tvSource.includes("quality-issue"), "TV must render open quality issue state");
+assert.ok(tvSource.includes("route.scheduleOverdue"), "TV must render overdue route state from the shared dashboard API");
+assert.ok(tvSource.indexOf('route.status === "已完成"') < tvSource.indexOf("route.scheduleOverdue"), "Completed green must override overdue red");
+assert.ok(tvSource.indexOf("route.scheduleOverdue") < tvSource.indexOf("route.qualityIssueActive"), "Overdue red must override quality issue purple");
+assert.ok(tvSource.includes("lastReportScheduleStatus"), "TV must render last report schedule status");
+assert.ok(tvStyles.includes(".route-node.early .route-time"), "Early report date must use the on-time color");
+assert.ok(!tvSource.includes("route.progress || 0"), "TV must not render route percentage inside an icon");
+assert.ok(tvStyles.includes("border-radius: 999px"), "Process icon must be an oval");
+assert.ok(tvStyles.includes("font-size: 13px"), "Planned range must use a larger font");
+assert.ok(tvStyles.includes("font: inherit"), "Report date and reporter must share typography");
+assert.ok(tvStyles.includes("white-space: nowrap"), "Planned range must not wrap inside an oval");
+assert.ok(tvStyles.includes("body.mobile-tv .route-node {\n  width: 78px"), "Mobile nodes must fit a full planned range");
+assert.ok(tvStyles.includes("z-index: 0"), "Connectors must stay behind ovals");
+assert.ok(tvStyles.includes("left: 100%"), "Connector must not overlap the next oval");
+assert.ok(tvStyles.includes("width: var(--route-gap)"), "Connector width must equal the process gap");
+assert.ok(tvStyles.includes("body.tv-carousel-mode .route-node {\n  width: 92px"), "TV nodes must use the shortened oval layout");
+assert.ok(tvStyles.includes("body.tv-carousel-mode .route-time {\n  min-width: 0;"), "TV report dates must not consume the full report row");
+assert.ok(tvStyles.includes("body.tv-carousel-mode .route-worker {\n  flex: 0 1 auto;"), "TV reporters must retain inline width");
+assert.ok(tvStyles.includes("body.tv-carousel-mode .route-report {\n  font-size: 10px;"), "TV report date and worker must use 10px text");
+assert.ok(tvStyles.includes("body.tv-carousel-mode .route-time {\n  min-width: 0;\n  max-width: none;\n  width: auto;\n  height: auto;\n  padding: 0;\n  flex: 0 0 auto;\n  font-size: inherit;\n  font-family: inherit;"), "TV report date must inherit the reporter font");
+assert.ok(tvStyles.includes("body.tv-carousel-mode .circle {\n  width: 80px;\n  height: 28px;\n  padding: 0;\n  font-size: 12px;"), "TV oval must keep planned dates inside its boundary without added padding");
+assert.ok(tvStyles.includes("body.mobile-tv .mobile-plan-hidden"), "Mobile-only hidden plan state must have its own style");
+assert.ok(tvStyles.includes(".route-node.active .circle"), "Active process style must exist");
+assert.ok(tvStyles.includes("var(--yellow)"), "Active process must use yellow");
+assert.ok(tvStyles.includes(".route-node.quality-issue"), "Quality issue purple glow style must exist");
+assert.ok(appSource.includes("plannedStartDate"), "Dispatch page must submit planned start date");
+assert.ok(appSource.includes("plannedEndDate"), "Dispatch page must submit planned end date");
+assert.ok(appSource.includes("visibleWorkOrders"), "Order tables must use the active work-order list");
+assert.ok(appSource.includes("计划判定"), "CSV must contain schedule status column");
+
+console.log("tv-schedule-ui: ok");

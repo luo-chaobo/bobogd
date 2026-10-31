@@ -1,0 +1,17 @@
+{
+  "manifest_version": 2,
+  "name": "Bobogd Board Redirect",
+  "version": "1.0.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "board-redirect@bobogd.local"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://screen.wljixie.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

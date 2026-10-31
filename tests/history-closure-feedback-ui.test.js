@@ -1,0 +1,21 @@
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+const source = fs.readFileSync(path.resolve(__dirname, "..", "public", "app.js"), "utf8");
+
+for (const text of ["创建时间", "交期时间", "完工时间", "已发货", "已开票", "重量", "异常记录", "质检详情", "客户反馈"]) assert.ok(source.includes(text), `missing ${text}`);
+assert.ok(source.includes("data-history-detail"));
+assert.ok(source.includes("data-fulfillment"));
+assert.ok(source.includes("data-fulfillment-toggle"));
+assert.ok(source.includes("openFulfillmentOrderId"));
+assert.ok(source.includes("fulfillment-popover"));
+assert.ok(source.includes('已发货: "shipped"'));
+assert.ok(source.includes('已开票: "invoiced"'));
+assert.ok(source.includes('result?.platformSync === "pending"'));
+assert.ok(source.includes("BOBO状态已保存，平台同步排队重试中"));
+assert.ok(source.includes('event.key !== "Escape"'));
+assert.ok(!source.includes('class="fulfillment-checks"'));
+assert.ok(source.includes("customerFeedbackPage"));
+assert.ok(source.includes("dashboardFinishedFrom"));
+assert.ok(!source.includes('id="historyPeriod"'));
+console.log("history-closure-feedback-ui: ok");

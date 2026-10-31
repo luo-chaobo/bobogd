@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>大屏看板统计与颜色逻辑说明</title>
+    <style>
+      :root {
+        --bg: #f3f7fb;
+        --card: #ffffff;
+        --ink: #071427;
+        --muted: #65738a;
+        --line: #dce5ef;
+        --green: #127c6b;
+        --green-soft: #e7f4f1;
+        --cyan: #0891b2;
+        --blue-soft: #edf7fb;
+        --red: #c3261d;
+        --red-soft: #fff0f0;
+        --orange: #d94b18;
+        --orange-soft: #fff3ea;
+        --yellow: #b45309;
+        --yellow-soft: #fff7e6;
+        --dark: #071018;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        line-height: 1.72;
+      }
+
+      .page {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 32px 24px 56px;
+      }
+
+      .cover {
+        background: linear-gradient(135deg, #071018 0%, #0b5a51 100%);
+        color: #fff;
+        padding: 34px 38px;
+        border-radius: 10px;
+        box-shadow: 0 18px 45px rgba(16, 46, 72, 0.18);
+      }
+
+      .cover h1 {
+        margin: 0 0 10px;
+        font-size: 34px;
+        line-height: 1.2;
+      }
+
+      .cover p {
+        margin: 0;
+        color: #d8ece9;
+        font-size: 17px;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 20px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 30px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.13);
+        color: #eefdfb;
+        font-size: 14px;
+      }
+
+      .screenshot-card {
+        overflow: hidden;
+        padding: 0;
+      }
+
+      .screenshot-frame {
+        background: #071018;
+        padding: 14px;
+      }
+
+      .screenshot-frame img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 8px;
+        border: 1px solid rgba(34, 211, 238, 0.28);
+      }
+
+      .screenshot-caption {
+        padding: 18px 22px 22px;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .screenshot-caption strong {
+        color: var(--ink);
+      }
+
+      nav,
+      section {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        margin-top: 18px;
+        padding: 24px 28px;
+        box-shadow: 0 10px 24px rgba(18, 49, 73, 0.06);
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 24px;
+        line-height: 1.35;
+      }
+
+      h3 {
+        margin: 20px 0 8px;
+        font-size: 18px;
+      }
+
+      p {
+        margin: 8px 0;
+      }
+
+      ul {
+        margin: 8px 0 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 5px;
+        background: #eef3f8;
+        color: #18324d;
+        font-family: Consolas, "Microsoft YaHei", monospace;
+      }
+
+      .toc-grid,
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+      }
+
+      .toc-grid a {
+        display: block;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #f5f8fb;
+        color: var(--ink);
+        text-decoration: none;
+        border: 1px solid #e5ecf4;
+      }
+
+      .toc-grid a:hover {
+        color: var(--green);
+        border-color: #b8d9d2;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+        background: #fbfdff;
+      }
+
+      .card h3 {
+        margin-top: 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+        font-size: 15px;
+      }
+
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        vertical-align: top;
+        text-align: left;
+      }
+
+      th {
+        background: #f2f6fa;
+        color: #304158;
+      }
+
+      .note {
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-left: 4px solid var(--green);
+        background: var(--green-soft);
+        color: #17463f;
+      }
+
+      .warn-note {
+        border-left-color: var(--yellow);
+        background: var(--yellow-soft);
+        color: #653806;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .swatch {
+        display: inline-flex;
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        margin-right: 6px;
+        vertical-align: -2px;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+      }
+
+      .c-cyan { background: #28d7ea; }
+      .c-green { background: #37d882; }
+      .c-bluegreen { background: #7dddf2; }
+      .c-red { background: #ff6577; }
+      .c-orange { background: #ff6a2f; }
+      .c-urgent { background: #ff9a8b; }
+      .c-yellow { background: #ffd447; }
+      .c-steel { background: #2c3e50; }
+      .c-neon { background: #00ff66; }
+      .c-gray { background: #7890a8; }
+
+      .formula {
+        display: block;
+        margin-top: 6px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #f5f8fb;
+        border: 1px solid #e6edf5;
+        font-family: Consolas, "Microsoft YaHei", monospace;
+        color: #18324d;
+      }
+
+      .flow {
+        display: grid;
+        gap: 10px;
+      }
+
+      .flow-step {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+        background: #fbfdff;
+      }
+
+      @media (max-width: 720px) {
+        .page {
+          padding: 18px 12px 36px;
+        }
+
+        .cover,
+        nav,
+        section {
+          padding: 20px;
+        }
+
+        .cover h1 {
+          font-size: 26px;
+        }
+
+        table {
+          font-size: 14px;
+        }
+      }
+
+      @media print {
+        body {
+          background: #fff;
+        }
+
+        .page {
+          max-width: none;
+          padding: 0;
+        }
+
+        .cover,
+        nav,
+        section {
+          box-shadow: none;
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="cover">
+        <h1>大屏看板统计与颜色逻辑说明</h1>
+        <p>说明生产状态监控看板上半屏数字统计来源，以及下半屏“加工工单”板块中颜色、状态、排序和工序节点的触发规则。</p>
+        <div class="meta">
+          <span class="pill">看板地址：https://screen.wljixie.com/tv.html</span>
+          <span class="pill">接口来源：/api/tv-dashboard</span>
+          <span class="pill">整理日期：2026/06/07</span>
+        </div>
+      </header>
+
+      <nav>
+        <h2>目录</h2>
+        <div class="toc-grid">
+          <a href="#data-source">1. 数据来源总览</a>
+          <a href="#top-metrics">2. 顶部数字统计</a>
+          <a href="#charts">3. 上半屏图表统计</a>
+          <a href="#orders">4. 加工工单排序与分页</a>
+          <a href="#colors">5. 工单颜色变化逻辑</a>
+          <a href="#route-colors">6. 工序节点颜色逻辑</a>
+          <a href="#examples">7. 示例解释</a>
+          <a href="#screenshot">看板截图总览</a>
+        </div>
+      </nav>
+
+      <section id="screenshot" class="screenshot-card">
+        <div class="screenshot-frame">
+          <img src="assets/tv-dashboard-20260607.jpg" alt="生产状态监控看板截图" />
+        </div>
+        <div class="screenshot-caption">
+          <strong>图示说明：</strong>上半屏包含急单、延期工单、48h 加急、待加工工序、工单总数、今日完成工单等数字卡片，以及准时率仪表、工单状态分布、车间工序负荷、近日报工趋势。下半屏是“加工工单”明细区，颜色会根据交期紧急程度、工序完成状态、报工情况和异常状态自动变化。后续章节中的统计口径和颜色触发规则，都可以对照这张截图查看。
+        </div>
+      </section>
+
+      <section id="data-source">
+        <h2>1. 数据来源总览</h2>
+        <p>电视大屏页面 <code>tv.html</code> 每 15 秒请求一次后端接口 <code>/api/tv-dashboard</code>，接口会从本地数据库中读取订单、工单、工序路线、报工记录、异常记录、员工信息和看板设置，然后组装成大屏数据。</p>
+        <div class="grid">
+          <div class="card">
+            <h3>主要数据表</h3>
+            <ul>
+              <li><code>orders</code>：订单信息，包含客户、产品、交期、优先级。</li>
+              <li><code>workOrders</code>：工单信息，包含工单号、计划数量、当前状态。</li>
+              <li><code>routes</code>：工序路线，包含工序名、派工人、状态、完成数量、完成时间、目标完成时间。</li>
+              <li><code>reports</code>：报工记录，包含报工人、完成数、合格数、不良数、返工数、报工时间。</li>
+              <li><code>exceptions</code>：异常记录，用于判断异常和处理状态。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>刷新机制</h3>
+            <ul>
+              <li>大屏数据接口：约每 15 秒刷新一次。</li>
+              <li>右上角 LIVE 时间：约每 1 秒刷新一次。</li>
+              <li>加工工单分页：按基础设置中的轮播间隔自动翻页。</li>
+              <li>手机横屏大屏：访问地址带 <code>?mobile=1</code> 时启用手机适配布局。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="top-metrics">
+        <h2>2. 顶部数字统计</h2>
+        <p>顶部第一行的 6 个数字来自接口返回的 <code>summary</code>。其中“活动工单”指状态不是 <code>已完成</code> 的工单。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>显示名称</th>
+              <th>统计口径</th>
+              <th>触发/计算规则</th>
+              <th>颜色</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>急单</td>
+              <td>当前未完成工单中，订单优先级为 <code>急单</code> 的数量。</td>
+              <td><span class="formula">activeOrders.filter(order.priority == "急单").length</span></td>
+              <td><span class="swatch c-yellow"></span>黄色，强调优先级高。</td>
+            </tr>
+            <tr>
+              <td>延期工单</td>
+              <td>当前未完成工单中，交期已经超过今天当前时间的数量。</td>
+              <td>系统把交期按当天 <code>23:59:59</code> 计算，若当前时间已经晚于该时间，则判定延期。<span class="formula">dueDate 23:59:59 &lt; 当前时间</span></td>
+              <td><span class="swatch c-red"></span>红色，表示需要立即关注。</td>
+            </tr>
+            <tr>
+              <td>48h加急</td>
+              <td>当前未完成工单中，距离交期不足或等于 48 小时，且尚未延期的数量。</td>
+              <td><span class="formula">0 &lt;= 交期剩余时间 &lt;= 48小时</span></td>
+              <td><span class="swatch c-red"></span>红色，提示即将到期。</td>
+            </tr>
+            <tr>
+              <td>待加工工序</td>
+              <td>所有工序中，状态为 <code>待开始</code> 或 <code>暂停</code> 的数量。</td>
+              <td><span class="formula">routes.filter(status == "待开始" 或 "暂停").length</span></td>
+              <td><span class="swatch c-cyan"></span>青色，表示待执行任务量。</td>
+            </tr>
+            <tr>
+              <td>工单总数</td>
+              <td>系统内全部工单数量，包含生产中、延期、已完成等所有状态。</td>
+              <td><span class="formula">workOrders.length</span></td>
+              <td><span class="swatch c-cyan"></span>青色。</td>
+            </tr>
+            <tr>
+              <td>今日完成工单</td>
+              <td>今天完成的工单数量。</td>
+              <td>满足任一条件即计入：工单 <code>completedAt</code> 是今天；或工单状态为已完成且其中任一工序 <code>completedAt</code> 是今天。<span class="formula">completedAt startsWith 今日日期</span></td>
+              <td><span class="swatch c-cyan"></span>青色。</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">说明：这里的“今天”按服务器本地日期计算，即当天 00:00:00 到次日 00:00:00。</div>
+      </section>
+
+      <section id="charts">
+        <h2>3. 上半屏图表统计</h2>
+
+        <h3>3.1 准时率仪表</h3>
+        <p>准时率用于粗略反映当前工单交期健康度。计算方式是全部工单数量减去当前延期工单数量，再除以全部工单数量。</p>
+        <p class="formula">准时率 = round((工单总数 - 当前延期工单数) / 工单总数 × 100%)</p>
+        <p>如果系统内没有任何工单，默认显示 100%。</p>
+
+        <h3>3.2 工单状态分布</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>图例</th>
+              <th>含义</th>
+              <th>统计规则</th>
+              <th>颜色</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>执行中</td>
+              <td>当前状态为进行中的工序数量。</td>
+              <td><code>routes.status == "进行中"</code></td>
+              <td><span class="swatch c-cyan"></span>青色</td>
+            </tr>
+            <tr>
+              <td>延期</td>
+              <td>当前延期工单数量。</td>
+              <td>同顶部“延期工单”。</td>
+              <td><span class="swatch c-red"></span>红色</td>
+            </tr>
+            <tr>
+              <td>今日完成</td>
+              <td>今天提交的报工记录数量。</td>
+              <td><code>reports.createdAt</code> 是今天的记录数量。</td>
+              <td><span class="swatch c-green"></span>绿色</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>3.3 车间工序负荷</h3>
+        <p>车间工序负荷固定按 9 个标准工序统计：图纸设计、激光、折弯、压铆、打孔攻丝、焊接、打磨、喷塑、组装。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>位置</th>
+              <th>数字含义</th>
+              <th>统计规则</th>
+              <th>颜色含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>柱子上方数字</td>
+              <td>该工序今天完成的工序数量。</td>
+              <td>该工序状态为 <code>已完成</code>，且 <code>completedAt</code> 或 <code>lastReportedAt</code> 落在今天。</td>
+              <td><span class="swatch c-neon"></span>荧光绿色，表示今日产出。</td>
+            </tr>
+            <tr>
+              <td>柱子下方数字</td>
+              <td>该工序当前待完成数量。</td>
+              <td>该工序状态不是 <code>已完成</code> 的数量。</td>
+              <td><span class="swatch c-steel"></span>钢蓝色，表示剩余任务量。</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="formula">柱状高度按各工序 “今日完成 + 待完成” 的最大值做比例缩放。</p>
+
+        <h3>3.4 近7日完工工单趋势</h3>
+        <p>近7日完工工单趋势展示最近 7 天每日完成工单数量，横轴为日期，节点数字为当天完成的工单数。</p>
+        <p class="formula">每日值 = 唯一完工时间 completedAt 位于当天的工单数量；旧工单缺失该字段时取最后一道已完成工序的时间</p>
+      </section>
+
+      <section id="orders">
+        <h2>4. 加工工单排序与分页</h2>
+        <p>下半屏“加工工单”只展示未完成工单，也就是状态不是 <code>已完成</code> 的工单。</p>
+        <div class="flow">
+          <div class="flow-step"><strong>第一步：</strong>过滤掉已完成工单，只留下当前仍需生产或处理的工单。</div>
+          <div class="flow-step"><strong>第二步：</strong>根据每张工单的交期计算 <code>dueLevel</code>：延期、48h 加急、正常。</div>
+          <div class="flow-step"><strong>第三步：</strong>按交期时间从近到远排序。由于延期单交期已经过去，会自然排在最前。</div>
+          <div class="flow-step"><strong>第四步：</strong>根据屏幕高度计算每页显示几条，一页显示不下时按看板设置自动轮播。</div>
+        </div>
+        <div class="note">当前代码中的排序核心是按交期时间 <code>dueAt</code> 升序排列；页面文案中“橙红=延期，浅红=48小时内加急，正常单按交期先后排列”对应的是展示说明。</div>
+      </section>
+
+      <section id="colors">
+        <h2>5. 工单颜色变化逻辑</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>触发条件</th>
+              <th>状态文字</th>
+              <th>整行效果</th>
+              <th>交期文字效果</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>交期已过，且工单未完成。</td>
+              <td><span class="swatch c-orange"></span>延期</td>
+              <td>整行边框和左侧背景呈橙红色。</td>
+              <td>交期显示橙红色，并带轻微发光。</td>
+              <td>最高警示级别，表示已经超过交期。</td>
+            </tr>
+            <tr>
+              <td>距离交期小于等于 48 小时，且尚未延期。</td>
+              <td><span class="swatch c-urgent"></span>加急</td>
+              <td>整行边框和左侧背景呈浅红色。</td>
+              <td>交期显示浅红色。</td>
+              <td>提醒主管优先关注，即将到期。</td>
+            </tr>
+            <tr>
+              <td>未延期，也不在 48 小时内。</td>
+              <td><span class="swatch c-green"></span>执行中</td>
+              <td>正常深色背景，青色边框。</td>
+              <td>交期显示浅蓝灰色。</td>
+              <td>正常生产中的工单。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>5.1 交期等级计算</h3>
+        <p>系统把订单交期日期转为当天晚上 <code>23:59:59</code>，再和当前时间比较。</p>
+        <ul>
+          <li>如果 <code>交期 23:59:59 &lt; 当前时间</code>，判定为延期。</li>
+          <li>如果 <code>交期剩余时间 &lt;= 48 小时</code>，判定为 48h 加急。</li>
+          <li>其他情况判定为正常。</li>
+        </ul>
+
+        <h3>5.2 进度条颜色</h3>
+        <p>加工工单里的总进度条统一使用青色。宽度由所有工序完成数量占所有工序计划数量的比例决定。</p>
+        <p class="formula">工单总进度 = round(所有工序 completedQty 合计 / 所有工序 planQty 合计 × 100%)</p>
+      </section>
+
+      <section id="route-colors">
+        <h2>6. 工序节点颜色逻辑</h2>
+        <p>每个加工工单行中间的圆形节点代表该工单的各道工序。节点颜色由工序状态、报工情况和工单交期共同决定。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>优先级</th>
+              <th>触发条件</th>
+              <th>节点颜色</th>
+              <th>完成/状态框</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>工序状态为 <code>已完成</code>。</td>
+              <td><span class="swatch c-green"></span>绿色圆圈。</td>
+              <td>完成时间框为绿色。</td>
+              <td>最高优先级；即使工单延期，已完成工序仍显示绿色。</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>工序状态为 <code>异常</code> 或 <code>返工</code>。</td>
+              <td><span class="swatch c-red"></span>红色圆圈。</td>
+              <td>状态框为红色。</td>
+              <td>表示该工序有问题，需要处理。</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>工单已延期，且该工序未完成。</td>
+              <td><span class="swatch c-red"></span>红色圆圈。</td>
+              <td>状态框为红色。</td>
+              <td>延期工单中未完成工序全部红色提醒。</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>工序已有完成数量，或存在最后报工时间，但还未达到已完成状态。</td>
+              <td><span class="swatch c-bluegreen"></span>淡蓝色圆圈。</td>
+              <td>状态框保持青色。</td>
+              <td>表示已经有人报过工，但工序尚未完全完成。</td>
+            </tr>
+            <tr>
+              <td>5</td>
+              <td>工序状态为 <code>进行中</code>。</td>
+              <td><span class="swatch c-cyan"></span>青色圆圈。</td>
+              <td>状态框保持青色。</td>
+              <td>表示这道工序已经开始。</td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td>以上条件都不满足。</td>
+              <td><span class="swatch c-gray"></span>灰蓝色圆圈。</td>
+              <td>显示“待完成”。</td>
+              <td>表示待开始或普通未完成状态。</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="warn-note note">注意：工序节点的颜色判断有优先级。比如一张延期工单里，已完成的工序仍然绿色；未完成工序会因为整单延期而变红。</div>
+
+        <h3>6.1 工序节点显示内容</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>位置</th>
+              <th>显示内容</th>
+              <th>来源</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>圆圈数字</td>
+              <td>该工序完成百分比。</td>
+              <td><code>completedQty / planQty × 100%</code></td>
+            </tr>
+            <tr>
+              <td>圆圈下方</td>
+              <td>工序名称。</td>
+              <td>工艺路线中的 <code>processName</code>。</td>
+            </tr>
+            <tr>
+              <td>时间框</td>
+              <td>已完成时显示完成时间；未完成时显示“待完成”。</td>
+              <td><code>completedAt</code>，没有则取最新报工时间。</td>
+            </tr>
+            <tr>
+              <td>黄色时间</td>
+              <td>目标完成时间。</td>
+              <td>生产主管在“派工与工艺路线”中设置的 <code>targetFinishTime</code>。</td>
+            </tr>
+            <tr>
+              <td>最下方姓名</td>
+              <td>最近报工人姓名。</td>
+              <td>最新报工记录的 <code>reporterId</code> 对应员工姓名；员工已删除时查历史快照。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="examples">
+        <h2>7. 示例解释</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>示例 1：WO-002 显示延期</h3>
+            <ul>
+              <li>交期为 06/03，而当前日期已经晚于 06/03 23:59:59。</li>
+              <li>工单状态不是已完成，所以整行进入延期样式。</li>
+              <li>左侧状态牌、整行边框、交期文字均显示橙红色。</li>
+              <li>已完成的激光、焊接、质检仍是绿色节点。</li>
+              <li>未完成的图纸设计节点因整单延期而显示红色。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>示例 2：普通执行中工单</h3>
+            <ul>
+              <li>交期未过，也不在 48 小时内。</li>
+              <li>左侧状态牌显示“执行中”。</li>
+              <li>整行使用正常深色背景。</li>
+              <li>交期为浅蓝灰色。</li>
+              <li>未完成工序为灰蓝色，进行中工序为青色，已报工未完成为淡蓝色。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>示例 3：车间工序负荷中“0 / 7”</h3>
+            <ul>
+              <li>上方绿色数字 0：今天完成该工序的数量为 0。</li>
+              <li>下方钢蓝色数字 7：该工序当前还有 7 道未完成。</li>
+              <li>如果今天提交报工并使某道工序完成，上方数字会增加。</li>
+              <li>如果某道工序完成，下方待完成数量会减少。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

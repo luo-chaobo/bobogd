@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>工序二维码打印</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #eef2f6;
+        color: #0b1830;
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      }
+
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+        padding: 12px;
+        background: #172033;
+        box-shadow: 0 2px 12px rgba(15, 23, 42, 0.18);
+      }
+
+      button {
+        min-height: 38px;
+        border: 0;
+        border-radius: 6px;
+        padding: 0 16px;
+        background: #156f62;
+        color: #fff;
+        font-size: 15px;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #e8edf3;
+        color: #0b1830;
+      }
+
+      .page {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 18px auto;
+        padding: 14mm;
+        background: #fff;
+        box-shadow: 0 12px 36px rgba(15, 23, 42, 0.16);
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        padding-bottom: 10mm;
+        border-bottom: 2px solid #0b1830;
+      }
+
+      .header-main {
+        flex: 1;
+        min-width: 0;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 24px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .meta {
+        color: #475569;
+        line-height: 1.6;
+        font-size: 13px;
+      }
+
+      .order-note {
+        flex: 0 0 70mm;
+        max-width: 70mm;
+        text-align: left;
+        color: #64748b;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .order-note strong {
+        display: block;
+        margin-bottom: 2mm;
+        color: #0b1830;
+        font-size: 13px;
+      }
+
+      .order-note-content {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .order-note.medium {
+        font-size: 10.5px;
+        line-height: 1.5;
+      }
+
+      .order-note.compact {
+        font-size: 9px;
+        line-height: 1.45;
+      }
+
+      .qr-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 5mm;
+        margin-top: 7mm;
+      }
+
+      .qr-card {
+        min-height: 64mm;
+        padding: 3.5mm;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        justify-items: center;
+        text-align: center;
+        break-inside: avoid;
+      }
+
+      .route-title {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .route-title span:last-child {
+        color: #156f62;
+      }
+
+      .qr-pair {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 2mm;
+        align-items: start;
+        margin: 2.5mm 0;
+      }
+
+      .qr-kind {
+        min-width: 0;
+        color: #475569;
+        font-size: 9px;
+        line-height: 1.3;
+      }
+
+      .qr-kind img {
+        display: block;
+        width: 21mm;
+        height: 21mm;
+        max-width: 100%;
+        margin: 0 auto 1.5mm;
+        object-fit: contain;
+      }
+
+      .qr-error {
+        width: 21mm;
+        height: 21mm;
+        margin: 0 auto 1.5mm;
+        padding: 2mm;
+        display: grid;
+        place-items: center;
+        border: 1px dashed #dc2626;
+        color: #b91c1c;
+        font-size: 8px;
+        line-height: 1.3;
+        overflow-wrap: anywhere;
+      }
+
+      .route-meta {
+        color: #475569;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .loading {
+        padding: 30mm;
+        text-align: center;
+        color: #64748b;
+      }
+
+      @page {
+        size: A4;
+        margin: 0;
+      }
+
+      @media print {
+        body {
+          background: #fff;
+        }
+
+        .toolbar {
+          display: none;
+        }
+
+        .page {
+          width: 210mm;
+          min-height: 297mm;
+          margin: 0;
+          box-shadow: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button onclick="window.print()">打印</button>
+      <button class="secondary" onclick="window.close()">关闭</button>
+    </div>
+    <main class="page" id="printPage">
+      <div class="loading">正在生成工序二维码...</div>
+    </main>
+    <script>
+      function esc(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      function noteSizeClass(value) {
+        const length = Array.from(String(value || "")).length;
+        if (length > 180) return "compact";
+        if (length > 80) return "medium";
+        return "normal";
+      }
+
+      async function api(path) {
+        const user = JSON.parse(localStorage.getItem("work_user") || "null");
+        const res = await fetch(path, { headers: { "x-user-id": user ? user.id : "" } });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "请求失败");
+        return data;
+      }
+
+      async function boot() {
+        const page = document.getElementById("printPage");
+        const workOrderId = new URLSearchParams(location.search).get("workOrderId");
+        if (!workOrderId) {
+          page.innerHTML = '<div class="loading">缺少工单参数</div>';
+          return;
+        }
+        try {
+          const data = await api("/api/bootstrap");
+          const workOrder = data.workOrders.find((item) => item.id === workOrderId);
+          if (!workOrder) throw new Error("工单不存在");
+          const routes = workOrder.routes || [];
+          const orderNote = String(workOrder.order?.note || "").trim();
+          const customerName = String(workOrder.customer?.name || "").trim();
+          page.innerHTML = `
+            <section class="header">
+              <div class="header-main">
+                <h1>${esc(workOrder.workNo)} ${esc(customerName || "客户未填写")}</h1>
+                <div class="meta">
+                  产品：${esc(workOrder.productName)}<br />
+                  交期：${esc(workOrder.order?.dueDate || "")} / 数量：${esc(workOrder.planQty)} ${esc(workOrder.order?.quantityUnit === "套" ? "套" : "件")}
+                  ${workOrder.order?.drawingNo ? `<br />激光编号：${esc(workOrder.order.drawingNo)}` : ""}
+                </div>
+              </div>
+              <aside class="order-note ${noteSizeClass(orderNote)}"><strong>订单备注</strong><div class="order-note-content">${esc(orderNote || "无备注")}</div></aside>
+            </section>
+            <section class="qr-grid">
+              ${routes.map((route) => {
+                // 1. 动态获取您当前网站的域名，并拼凑出完整的报工网址
+                const scanUrl = `${window.location.origin}/scan.html?routeToken=${route.qrToken}`;
+                // 2. 调用全球最稳定的专业二维码 API 生成极其标准的二维码图片
+                const safeQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(scanUrl)}`;
+
+                return `
+                <article class="qr-card">
+                  <div class="route-title"><span>${route.sequence}. ${esc(route.processName)}</span><span>${esc(route.status)}</span></div>
+                  <div class="qr-pair">
+                    <div class="qr-kind">
+                      <img
+                        src="/api/qr/route/${encodeURIComponent(route.id)}/weapp.png"
+                        alt="${esc(route.processName)}微信小程序码"
+                        data-weapp-code
+                      />
+                      微信扫一扫
+                    </div>
+                    <div class="qr-kind">
+                      <img src="${safeQrUrl}" alt="${esc(route.processName)}标准二维码" crossorigin="anonymous" />
+                      小程序内扫码
+                    </div>
+                  </div>
+                  <div class="route-meta">
+                    工单：${esc(workOrder.workNo)}<br />
+                    计划：${esc(route.planQty)} ${esc(workOrder.order?.quantityUnit === "套" ? "套" : "件")} / 已完：${esc(route.completedQty || 0)} ${esc(workOrder.order?.quantityUnit === "套" ? "套" : "件")}
+                  </div>
+                </article>
+                `;
+              }).join("")}
+            </section>
+          `;
+          document.querySelectorAll("[data-weapp-code]").forEach((image) => {
+            image.addEventListener("error", async () => {
+              let message = "小程序码生成失败";
+              try {
+                const response = await fetch(image.src);
+                const data = await response.json();
+                message = data.error || message;
+              } catch {}
+              const error = document.createElement("div");
+              error.className = "qr-error";
+              error.textContent = message;
+              image.replaceWith(error);
+            }, { once: true });
+          });
+        } catch (error) {
+          page.innerHTML = `<div class="loading">${esc(error.message)}</div>`;
+        }
+      }
+
+      boot();
+    </script>
+  </body>
+</html>

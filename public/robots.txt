@@ -1,7 +1,0 @@
-User-agent: *
-Allow: /
-Disallow: /admin.html
-Disallow: /api/admin/
-Disallow: /api/order-status
-
-Sitemap: https://wljixie.com/sitemap.xml

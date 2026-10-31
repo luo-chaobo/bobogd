@@ -1,0 +1,24 @@
+{
+  "appName": "非标钣金工单系统",
+  "wechatMiniProgram": {
+    "appId": "请填写微信小程序 AppID",
+    "cloudEnvId": "请填写微信云开发环境 ID"
+  },
+  "api": {
+    "baseUrl": "https://你的正式域名",
+    "localUrl": "http://localhost:3000"
+  },
+  "storage": {
+    "provider": "wechat-cloud",
+    "bucket": "work-order-attachments"
+  },
+  "serverEnvironment": {
+    "PORT": "3000",
+    "QR_BASE_URL": "https://bobogd.wljixie.com",
+    "WX_APPID": "请填写微信小程序 AppID",
+    "WX_APP_SECRET": "仅在服务器环境变量中填写，不要提交到代码仓库",
+    "WX_CODE_ENV_VERSION": "trial",
+    "FUTURE_WEBHOOK_URL": "https://test.wljixie.com/api/integrations/bobo/events",
+    "BOBO_INTEGRATION_SECRET": "填写与客服平台完全一致的共享密钥"
+  }
+}
