@@ -1956,3 +1956,9 @@ body.mobile-tv.compact-mobile .due-cell {
   min-width: 66px;
   font-size: 12px;
 }
+
+.route-node.field-exception .circle { border-color: #c084fc; color: #c084fc; box-shadow: 0 0 16px #a855f744; }
+.route-node.field-exception .route-report .route-time,
+.route-node.field-exception .route-report .route-worker { color: #8b9caf; }
+.badge.field-exception { color: #c084fc; border-color: #c084fc; }
+.field-overdue { color: #ff637c; margin-left: 4px; font-size: 12px; }

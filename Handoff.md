@@ -1,5 +1,23 @@
 # 项目交接
 
+## 2026-11-02 仅异常上报（本地）
+
+- 普通生产报工页移除异常类型，扩大异常说明并增加独立按钮；仅传说明、图片和工序 ID，忽略默认完成/返工数量，不创建生产报工记录。
+- 待开始、暂停任务及扫码可进入异常上报页；开始或继续生产后仍可正常报工。独立异常不改变工序生产状态，未解决异常继续阻止整单完结。
+- 看板用紫色显示未解决独立异常，灰色显示最近上报日期和员工，工单左侧增加异常标签；同时超期时增加红色超期文字。
+- 保留质检、返工及原异常流程；未修改历史记录、未部署或提交。语法/差异检查结果见本次执行记录，交互与小程序真机待验收。
+
+
+## 2026-10-31 GitHub 主线与发布方案
+
+- 用户确认 `feature/platform-delivery` 是当前使用代码，并要求合入既有 GitHub 私有仓库 `luo-chaobo/bobogd` 的 `main`。
+- 远端 `main` 当前指向合并提交 `743d1be`，其文件树来自 `feature/platform-delivery` @ `bdaf44a`；旧 `main` 历史作为合并父提交保留。
+- 当前工作树仍在 `feature/platform-delivery` @ `bdaf44a`，跟踪 `origin/feature/platform-delivery`；本地 `main` @ `1370faa` 与远端新主线不是可直接快进关系。后续从 GitHub main 新建独立检出，勿重置或覆盖此工作树。
+- 本轮文档修改前工作区干净；当前有 4 项未提交文档改动（README.md、Handoff.md、CHANGELOG.md、`docs/version-management.md`），没有业务代码修改。
+- 本地 `scripts/build-release.ps1` 可从干净的 Git 标签构建 ZIP、版本清单和 SHA-256；操作方案见 `docs/version-management.md`。README 已增加入口。
+- `package.json` 当前版本 `0.2.0`，历史服务器截图记录 `0.4.0`；部署前需只读核对线上进程、当前 release 与版本指纹。线上状态未在本次登录核验，GitHub 更新不代表已部署。
+- 仅增加版本管理文档；本轮未运行测试、未登录或修改宝塔服务器、生产数据库和附件，未提交或推送本次文档修改。
+
 ## 2026-10-29 生产总览图表中心
 
 - 在已有排产诊断清单/只读订单详情工作区改动上增量实现图表中心；目标工作树 `D:\WMR\lcb\未来网站改造\bobo-platform-delivery-worktree`，`feature/platform-delivery` @ `538b1b6`。
