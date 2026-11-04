@@ -4,6 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { weappImageType } = require("./lib/weapp-image");
+const { readRawBody, parseBody } = require("./lib/request-body");
 const { normalizeUnitPrice, calculateOrderTotal, identifyFinancialAccessUsers, financialAccessUserIds, createSerialQueue, hasOrderNumberConflict, normalizeOrderNumber } = require("./lib/order-financials");
 
 const LOCAL_CONFIG_FILE = path.join(__dirname, "config.local.json");
@@ -51,7 +52,7 @@ const RESTRICTED_VIEW_PHONES = new Set([
   "15257457485",
   "15728038503",
 ]);
-const AUDIT_RETENTION_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+const AUDIT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const TV_VIEW_TOKEN_SECRET = String(process.env.TV_VIEW_TOKEN_SECRET || WX_APP_SECRET).trim()
   || crypto.randomBytes(32).toString("hex");
 const TV_VIEW_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
@@ -60,6 +61,7 @@ let wechatAccessTokenCache = { value: "", expiresAt: 0 };
 let wechatAccessTokenPromise = null;
 const weappCodePromises = new Map();
 let mysqlPool = null;
+let databaseRevision = 0;
 let tvDatabaseCache = { value: null, expiresAt: 0 };
 const tvDashboardCache = new Map();
 const defaultSettings = {
@@ -178,7 +180,7 @@ function normalizeTargetFinishTime(value) {
 function normalizePlanDate(value) {
   const text = String(value || "").trim().replaceAll("/", "-");
   if (!text) return "";
-  return normalizeDate(text.slice(0, 10));
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? normalizeDate(text) : "";
 }
 
 function normalizeRouteSchedule(startValue, endValue) {
@@ -456,6 +458,7 @@ async function ensureDb() {
 }
 
 async function readDb(maxAgeMs = 0) {
+  const readRevision = databaseRevision;
   if (maxAgeMs > 0 && tvDatabaseCache.value && tvDatabaseCache.expiresAt > Date.now()) {
     return tvDatabaseCache.value;
   }
@@ -687,7 +690,7 @@ async function readDb(maxAgeMs = 0) {
   db.processes.sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "zh-Hans-CN"));
   if (processOrderBeforeSort !== db.processes.map((process) => process.id).join(",")) changed = true;
   if (changed) await writeDb(db);
-  if (maxAgeMs > 0) tvDatabaseCache = { value: db, expiresAt: Date.now() + maxAgeMs };
+  if (maxAgeMs > 0 && readRevision === databaseRevision) tvDatabaseCache = { value: db, expiresAt: Date.now() + maxAgeMs };
   return db;
 }
 
@@ -845,6 +848,7 @@ function makeQrSvg(text) {
 }
 
 async function writeDb(db) {
+  databaseRevision += 1;
   tvDatabaseCache = { value: null, expiresAt: 0 };
   tvDashboardCache.clear();
   if (DB_DRIVER === "mysql") {
@@ -853,9 +857,14 @@ async function writeDb(db) {
       "REPLACE INTO app_state (name, value_json, updated_at) VALUES (?, CAST(? AS JSON), NOW())",
       [MYSQL_STATE_KEY, JSON.stringify(db)]
     );
+    databaseRevision += 1;
+    tvDatabaseCache = { value: null, expiresAt: 0 };
+    tvDashboardCache.clear();
     return;
   }
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf8");
+  tvDatabaseCache = { value: null, expiresAt: 0 };
+  tvDashboardCache.clear();
 }
 
 function normalizedOrderSource(order) {
@@ -903,14 +912,6 @@ function validExternalSignature(req, rawBody) {
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-function readRawBody(req) {
-  return new Promise((resolve, reject) => {
-    let raw = "";
-    req.on("data", (chunk) => { raw += chunk; });
-    req.on("end", () => resolve(raw));
-    req.on("error", reject);
-  });
-}
 
 let externalOrderWrite = Promise.resolve();
 function serializeExternalOrder(task) {
@@ -937,7 +938,14 @@ const serializeOrderNumberWrite = createSerialQueue();
 const ORDER_NUMBER_WRITE_PATHS = new Set(["/api/orders", "/api/orders/update", "/api/orders/repeat", "/api/external/work-orders"]);
 const serializeDispatchBoardWrite = createSerialQueue();
 const DISPATCH_BOARD_WRITE_PATHS = new Set([
+  "/api/routes/publish-schedule",
+  "/api/assign",
+  "/api/routes",
+  "/api/routes/delete",
   "/api/dispatch-board/route-toggle",
+  "/api/dispatch-board/report",
+  "/api/report",
+  "/api/route-status",
   "/api/dispatch-board/route-schedule",
   "/api/dispatch-board/order-due-date",
 ]);
@@ -1630,23 +1638,6 @@ async function generateCadPreview(drawing) {
   return { previewUrl: "", previewError: "CAD 预览生成失败" };
 }
 
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > 8 * 1024 * 1024) reject(new Error("请求体过大"));
-    });
-    req.on("end", () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch {
-        reject(new Error("JSON 格式错误"));
-      }
-    });
-  });
-}
 
 function currentUser(req, db) {
   const userId = req.headers["x-user-id"];
@@ -1680,7 +1671,7 @@ function viewerFromToken(db, token) {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!data.audience || Number(data.expiresAt) <= Date.now()) return null;
     const user = db.users.find((item) => item.id === data.userId && item.active);
-    return user ? { user, audience: data.audience } : null;
+    return user ? { user, audience: data.audience, expiresAt: Number(data.expiresAt) } : null;
   } catch {
     return null;
   }
@@ -2230,12 +2221,27 @@ function buildTvDashboard(db, showCustomer = false, source = "all") {
   };
 }
 
+const scheduleSubscribers = new Set();
+function publishScheduleChange() {
+  for (const response of scheduleSubscribers) {
+    if (!response.destroyed && !response.write(`event: schedule\ndata: {}\n\n`)) response.end();
+  }
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  const requestId = res.getHeader("X-Request-ID") || crypto.randomUUID();
+  res.setHeader("X-Request-ID", requestId);
+  const requestStartedAt = Date.now();
+  res.once("finish", () => {
+    const durationMs = Date.now() - requestStartedAt;
+    if (durationMs >= 1000 && url.pathname !== "/api/schedule-events") console.warn(JSON.stringify({ requestId, path: url.pathname, status: res.statusCode, durationMs }));
+  });
+  const requestRevision = databaseRevision;
   let db;
   let dbReadMs = 0;
   try {
-    const cacheableTvRequest = req.method === "GET" && ["/api/tv-viewer-token", "/api/tv-dashboard"].includes(url.pathname);
+    const cacheableTvRequest = req.method === "GET" && ["/api/tv-viewer-token", "/api/tv-dashboard", "/api/schedule-events"].includes(url.pathname);
     const dbReadStartedAt = Date.now();
     db = await readDb(cacheableTvRequest ? TV_DASHBOARD_CACHE_TTL_MS : 0);
     dbReadMs = Date.now() - dbReadStartedAt;
@@ -2244,6 +2250,23 @@ async function handleApi(req, res) {
     return send(res, 500, { error: "数据存储不可用" });
   }
   try {
+    if (req.method === "GET" && url.pathname === "/api/schedule-events") {
+      const token = url.searchParams.get("viewerToken") || "";
+      const viewer = viewerFromToken(db, token);
+      if (!viewer || !["mobile-tv", "dispatch-board"].includes(viewer.audience)) return send(res, 401, { error: "看板身份已失效" });
+      if (scheduleSubscribers.size >= 200) return send(res, 503, { error: "实时连接繁忙" });
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" });
+      res.write("retry: 3000\nevent: ready\ndata: {}\n\n");
+      scheduleSubscribers.add(res);
+      const expiresAt = viewer.expiresAt;
+      const heartbeat = setInterval(() => {
+        if (Date.now() >= expiresAt) return res.end();
+        res.write(": heartbeat\n\n");
+      }, 15000);
+      const cleanup = () => { clearInterval(heartbeat); scheduleSubscribers.delete(res); };
+      res.on("close", cleanup);
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/external/health") {
       return send(res, 200, { enabled: Boolean(BOBO_INTEGRATION_SECRET), service: "external-work-orders", processMode: "single-process" });
     }
@@ -2343,7 +2366,7 @@ async function handleApi(req, res) {
       const cached = tvDashboardCache.get(cacheKey);
       const cacheHit = Boolean(cached && cached.expiresAt > Date.now());
       const dashboard = cacheHit ? cached.value : buildTvDashboard(db, canViewRestrictedBoard(viewer), source);
-      if (!cacheHit) tvDashboardCache.set(cacheKey, { value: dashboard, expiresAt: Date.now() + TV_DASHBOARD_CACHE_TTL_MS });
+      if (!cacheHit && requestRevision === databaseRevision) tvDashboardCache.set(cacheKey, { value: dashboard, expiresAt: Date.now() + TV_DASHBOARD_CACHE_TTL_MS });
       const total = dashboard.activeOrders.length;
       const requestedLimit = Number(url.searchParams.get("limit"));
       const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
@@ -2434,6 +2457,7 @@ async function handleApi(req, res) {
         beforeStatus, afterStatus: nextStatus, planQty: Number(route.planQty || 0), completedQty: Number(route.completedQty || 0),
       });
       await writeDb(db);
+      publishScheduleChange();
       return send(res, 200, { ok: true, route });
     }
 
@@ -2464,6 +2488,7 @@ async function handleApi(req, res) {
         after: { plannedStartDate: route.plannedStartDate, plannedEndDate: route.plannedEndDate },
       });
       await writeDb(db);
+      publishScheduleChange();
       return send(res, 200, { ok: true, route });
     }
 
@@ -2487,7 +2512,8 @@ async function handleApi(req, res) {
         afterDueDate: dueDate,
       });
       await writeDb(db);
-      return send(res, 200, { ok: true, order });
+      publishScheduleChange();
+      return send(res, 200, { ok: true, order, dashboard: buildTvDashboard(db, true, ["factory", "platform"].includes(body.source) ? body.source : "all") });
     }
 
     const qrRouteMatch = url.pathname.match(/^\/api\/qr\/route\/([^/]+)\.svg$/);
@@ -2562,8 +2588,25 @@ async function handleApi(req, res) {
       });
     }
 
-    const user = currentUser(req, db);
+    const dispatchReportRequest = ["/api/dispatch-board/report", "/api/dispatch-board/report-context", "/api/dispatch-board/report-upload"].includes(url.pathname);
+    let user;
+    if (dispatchReportRequest) {
+      const authorization = String(req.headers.authorization || "");
+      const viewer = viewerFromToken(db, authorization.startsWith("Bearer ") ? authorization.slice(7) : "");
+      if (!viewer || viewer.audience !== "dispatch-board") return send(res, 401, { error: "派工看板身份已失效，请重新打开" });
+      if (!canManage(viewer.user) || !canViewRestrictedBoard(viewer.user)) return send(res, 403, { error: "无权代报工" });
+      user = viewer.user;
+    } else user = currentUser(req, db);
     if (!user) return send(res, 401, { error: "请先登录" });
+    if (req.method === "GET" && url.pathname === "/api/dispatch-board/report-context") {
+      const route = db.routes.find((item) => item.id === url.searchParams.get("routeId"));
+      if (!route) return send(res, 404, { error: "工序不存在" });
+      if (route.status !== "进行中") return send(res, 409, { error: "只有进行中的工序才能代报工，请刷新" });
+      const workOrder = db.workOrders.find((item) => item.id === route.workOrderId);
+      const order = db.orders.find((item) => item.id === workOrder?.orderId);
+      return send(res, 200, { route: enrichRoute(db, route), workNo: workOrder?.workNo || "", productName: workOrder?.productName || "", quantityUnit: normalizeQuantityUnit(order?.quantityUnit), managerName: user.name,
+        issueRoutes: db.routes.filter((item) => item.workOrderId === route.workOrderId && item.processName !== "质检" && item.routeType !== "rework").sort((a, b) => a.sequence - b.sequence).map((item) => ({ id: item.id, processName: item.processName, sequence: item.sequence })) });
+    }
     res.viewOrderFinancials = financialAccessUserIds(db.users, db.orderFinancialAccessUserIds).has(String(user.id));
 
     if (req.method === "GET" && url.pathname === "/api/deliveries/available") {
@@ -3425,6 +3468,7 @@ async function handleApi(req, res) {
       const workOrderId = id("w");
       const createdAt = new Date().toISOString();
       const quantity = Number(body.quantity);
+      if (!Number.isFinite(quantity) || quantity <= 0) return send(res, 400, { error: "数量必须为有效正数" });
       const totalAmount = calculateOrderTotal(priceResult.value, quantity);
       if (priceResult.value !== null && totalAmount === null) return send(res, 400, { error: "订单总金额超出可处理范围" });
       const order = { id: orderId, orderNo, customerId: body.customerId, productName, drawingNo: body.drawingNo || "", weightKg: weight.value, quantity, unitPrice: priceResult.value, totalAmount, quantityUnit, dueDate, priority: body.priority || "普通", status: "未开始", note: body.note || "", createdAt, orderOrigin: "factory", sourceChannel: "factory_manual", externalOrderNumber: "" };
@@ -3462,6 +3506,36 @@ async function handleApi(req, res) {
       return send(res, 200, { ok: true, order, workOrder });
     }
 
+    if (req.method === "POST" && url.pathname === "/api/routes/publish-schedule") {
+      if (!canManage(user.role)) return send(res, 403, { error: "无权发布排期" });
+      const body = await parseBody(req);
+      const workOrder = db.workOrders.find((item) => item.id === body.workOrderId);
+      if (!workOrder) return send(res, 409, { error: "工单不存在，请放弃草稿并刷新" });
+      if (!Array.isArray(body.routes) || !body.routes.length) return send(res, 400, { error: "没有需要发布的排期" });
+      const seen = new Set();
+      const updates = [];
+      for (const item of body.routes) {
+        if (!item || typeof item.routeId !== "string" || seen.has(item.routeId)) return send(res, 400, { error: "工序ID无效或重复" });
+        seen.add(item.routeId);
+        const route = db.routes.find((entry) => entry.id === item.routeId && entry.workOrderId === workOrder.id);
+        if (!route) return send(res, 409, { error: "工序不存在或不属于该工单，请放弃草稿并刷新", routeId: item.routeId });
+        const beforeStart = String(route.plannedStartDate || "");
+        const beforeEnd = String(route.plannedEndDate || route.targetFinishTime?.slice(0, 10) || "");
+        if (beforeStart !== item.expectedStartDate || beforeEnd !== item.expectedEndDate) return send(res, 409, { error: route.processName + "排期已被修改，请放弃草稿并刷新", routeId: route.id });
+        const schedule = normalizeRouteSchedule(item.plannedStartDate, item.plannedEndDate);
+        if (schedule.error) return send(res, 400, { error: route.processName + "：" + schedule.error, routeId: route.id });
+        updates.push({ route, schedule, beforeStart, beforeEnd });
+      }
+      for (const { route, schedule } of updates) {
+        Object.assign(route, schedule);
+        route.targetFinishTime = schedule.plannedEndDate ? schedule.plannedEndDate + "T23:00" : "";
+      }
+      appendAudit(db, user, "schedule-publish", "workOrder", workOrder.id, { routes: updates.map(({ route, beforeStart, beforeEnd }) => ({ routeId: route.id, beforeStart, beforeEnd, plannedStartDate: route.plannedStartDate, plannedEndDate: route.plannedEndDate })) });
+      await writeDb(db);
+      publishScheduleChange();
+      return send(res, 200, { ok: true, routes: updates.map(({ route }) => route) });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/assign") {
       if (!canManage(user.role)) return send(res, 403, { error: "无权派工" });
       const body = await parseBody(req);
@@ -3469,18 +3543,20 @@ async function handleApi(req, res) {
       if (!route) return send(res, 404, { error: "工序不存在" });
       const assigneePermission = validateAssignee(db, route.processName, body.userId || "");
       if (!assigneePermission.ok) return send(res, 400, { error: assigneePermission.error });
-      const targetFinishTime = body.targetFinishTime ? normalizeTargetFinishTime(body.targetFinishTime) : "";
-      if (body.targetFinishTime && !targetFinishTime) return send(res, 400, { error: "目标完成时间格式不正确" });
-      const schedule = normalizeRouteSchedule(body.plannedStartDate, body.plannedEndDate || targetFinishTime.slice(0, 10));
-      if (schedule.error) return send(res, 400, { error: schedule.error });
+      const hasSchedule = ["plannedStartDate", "plannedEndDate", "targetFinishTime"].some((key) => Object.hasOwn(body, key));
+      if (hasSchedule) {
+        const targetFinishTime = body.targetFinishTime ? normalizeTargetFinishTime(body.targetFinishTime) : "";
+        if (body.targetFinishTime && !targetFinishTime) return send(res, 400, { error: "目标完成时间格式不正确" });
+        const schedule = normalizeRouteSchedule(body.plannedStartDate, body.plannedEndDate || targetFinishTime.slice(0, 10));
+        if (schedule.error) return send(res, 400, { error: schedule.error });
+        Object.assign(route, schedule, { targetFinishTime });
+      }
       route.assignedRole = getProcessRole(route.processName);
       route.assignedTo = body.userId || "";
-      route.targetFinishTime = targetFinishTime;
-      route.plannedStartDate = schedule.plannedStartDate;
-      route.plannedEndDate = schedule.plannedEndDate;
-      appendAudit(db, user, "route-assign", "route", route.id, { assignedTo: route.assignedTo, targetFinishTime, plannedStartDate: route.plannedStartDate, plannedEndDate: route.plannedEndDate });
+      appendAudit(db, user, "route-assign", "route", route.id, { assignedTo: route.assignedTo, targetFinishTime: route.targetFinishTime || "", plannedStartDate: route.plannedStartDate, plannedEndDate: route.plannedEndDate });
       await writeDb(db);
-      return send(res, 200, { ok: true });
+      publishScheduleChange();
+      return send(res, 200, { ok: true, route });
     }
 
     if (req.method === "POST" && url.pathname === "/api/routes") {
@@ -3631,12 +3707,28 @@ async function handleApi(req, res) {
       return send(res, 200, { ok: true, item });
     }
 
-    if (req.method === "POST" && url.pathname === "/api/report") {
+    if (req.method === "POST" && ["/api/report", "/api/dispatch-board/report"].includes(url.pathname)) {
       const body = await parseBody(req);
       const route = db.routes.find((r) => r.id === body.routeId);
       if (!route) return send(res, 404, { error: "工序不存在" });
-      const permission = canReportProcess(user, route);
+      const proxyReport = url.pathname === "/api/dispatch-board/report";
+      const permission = proxyReport ? { ok: true } : canReportProcess(user, route);
       if (!permission.ok) return send(res, 403, { error: permission.error });
+      const submissionId = String(body.submissionId || "");
+      const submissionHash = crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex");
+      if (proxyReport) {
+        if (!/^[a-zA-Z0-9-]{16,80}$/.test(submissionId)) return send(res, 400, { error: "报工提交标识无效" });
+        const previous = db.reports.find((item) => item.dispatchSubmissionId === submissionId && item.reporterId === user.id);
+        if (previous) {
+          if (previous.dispatchSubmissionHash !== submissionHash || previous.routeId !== route.id) return send(res, 409, { error: "该提交已处理，请关闭后重新打开报工窗口" });
+          return send(res, 200, { ok: true, route, report: previous, dashboard: buildTvDashboard(db, true, ["factory", "platform"].includes(body.source) ? body.source : "all") });
+        }
+        if (route.status !== "进行中" || Number(body.expectedCompletedQty) !== Number(route.completedQty || 0)) return send(res, 409, { error: "工序状态或剩余数量已变化，请关闭后重新打开" });
+        if (route.processName === "质检" && Number(body.expectedInspectionAvailableQty) !== qualityRouteMeta(db, route).inspectionAvailableQty) return send(res, 409, { error: "可送检数量已变化，请重新打开" });
+      }
+      for (const key of (route.processName === "质检" ? ["submittedQty", "inspectedQty", "goodQty", "badQty"] : ["completedQty", "reworkQty"])) {
+        if (!Number.isFinite(Number(body[key] ?? (["reworkQty", "badQty"].includes(key) ? 0 : NaN)))) return send(res, 400, { error: "报工数量必须为有效数字" });
+      }
       const beforeStatus = route.status;
       const isQuality = route.processName === "质检";
       const reportWorkOrder = db.workOrders.find((item) => item.id === route.workOrderId);
@@ -3804,9 +3896,17 @@ async function handleApi(req, res) {
         badQty: report.badQty,
         reworkQty: report.reworkQty,
       });
+      if (proxyReport) {
+        report.dispatchSubmissionId = submissionId;
+        report.dispatchSubmissionHash = submissionHash;
+        report.dispatchRouteResult = { ...route };
+        report.source = "dispatch-board";
+        appendAudit(db, user, "dispatch-report-create", "report", report.id, { routeId: route.id, submissionId, managerId: user.id });
+      }
       await writeDb(db);
+      publishScheduleChange();
       setTimeout(() => void processPlatformWebhooks(), 50);
-      return send(res, 200, { ok: true, route, report });
+      return send(res, 200, { ok: true, route, report, ...(proxyReport ? { dashboard: buildTvDashboard(db, true, ["factory", "platform"].includes(body.source) ? body.source : "all") } : {}) });
     }
 
     if (req.method === "POST" && url.pathname === "/api/exceptions/resolve") {
@@ -3937,7 +4037,7 @@ async function handleApi(req, res) {
       return send(res, 200, item);
     }
 
-    if (req.method === "POST" && url.pathname === "/api/upload") {
+    if (req.method === "POST" && ["/api/upload", "/api/dispatch-board/report-upload"].includes(url.pathname)) {
       const body = await parseBody(req);
       const saved = saveDataUrlFile(body, { prefix: "img" });
       if (saved.error) return send(res, 400, { error: saved.error });
@@ -3950,7 +4050,8 @@ async function handleApi(req, res) {
 
     return send(res, 404, { error: "接口不存在" });
   } catch (error) {
-    return send(res, 500, { error: error.message });
+    console.error(JSON.stringify({ requestId, method: req.method, path: url.pathname, error: error.message }));
+    return send(res, error.statusCode || 500, { error: error.statusCode ? error.message : "服务器处理失败，请联系管理员", requestId });
   }
 }
 
@@ -3969,17 +4070,44 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
-const server = http.createServer((req, res) => {
-  if (req.url.startsWith("/api/")) {
-    const pathname = new URL(req.url, "http://localhost").pathname;
-    if (req.method === "POST" && ORDER_NUMBER_WRITE_PATHS.has(pathname)) {
-      return serializeOrderNumberWrite(() => handleApi(req, res));
+async function dispatchApi(req, res) {
+  const pathname = new URL(req.url, "http://localhost").pathname;
+  const requestId = crypto.randomUUID();
+  res.setHeader("X-Request-ID", requestId);
+  try {
+    // Receive the body before taking a write-queue slot.
+    if (["POST", "PUT", "PATCH"].includes(req.method)) await readRawBody(req);
+    if (req.aborted || res.destroyed) return;
+    const queue = req.method === "POST" && ORDER_NUMBER_WRITE_PATHS.has(pathname) ? serializeOrderNumberWrite
+      : req.method === "POST" && DISPATCH_BOARD_WRITE_PATHS.has(pathname) ? serializeDispatchBoardWrite : null;
+    if (!queue) return await handleApi(req, res);
+    const queuedAt = Date.now();
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      if (!res.destroyed && !res.writableEnded) send(res, 503, { error: "操作排队超时，请刷新确认后再提交", requestId });
+      console.warn(JSON.stringify({ requestId, path: pathname, stage: "queue-timeout", durationMs: Date.now() - queuedAt }));
+    }, 20000);
+    timer.unref();
+    try {
+      await queue(async () => {
+        clearTimeout(timer);
+        if (expired || req.aborted || res.destroyed || res.writableEnded) return;
+        const queueWaitMs = Date.now() - queuedAt;
+        if (queueWaitMs >= 1000) console.warn(JSON.stringify({ requestId, path: pathname, stage: "queue-start", queueWaitMs }));
+        await handleApi(req, res);
+      });
+    } finally {
+      clearTimeout(timer);
     }
-    if (req.method === "POST" && DISPATCH_BOARD_WRITE_PATHS.has(pathname)) {
-      return serializeDispatchBoardWrite(() => handleApi(req, res));
-    }
-    return handleApi(req, res);
+  } catch (error) {
+    console.error(JSON.stringify({ requestId, path: pathname, stage: "request", error: error.message }));
+    if (!res.destroyed && !res.writableEnded) send(res, error.statusCode || 500, { error: error.statusCode ? error.message : "服务器处理失败", requestId });
   }
+}
+
+const server = http.createServer((req, res) => {
+  if (req.url.startsWith("/api/")) return void dispatchApi(req, res);
   serveStatic(req, res);
 });
 

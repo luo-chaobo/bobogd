@@ -2088,3 +2088,13 @@ th {
 .quantity-control select {
   width: 100%;
 }
+
+.dispatch-work-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; padding-top: 12px; }
+.dispatch-work-footer .add-route-row { padding-top: 0; max-width: 100%; }
+.dispatch-work-footer .schedule-toolbar { margin: 0 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 600px) {
+  .dispatch-work-footer .add-route-row { grid-template-columns: minmax(0, 180px) 120px; }
+  .dispatch-work-footer .schedule-toolbar { width: 100%; }
+}
+.schedule-error { color: #b42318; }
+.route-row.schedule-conflict { outline: 2px solid #b42318; outline-offset: -2px; }

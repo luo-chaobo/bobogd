@@ -1962,3 +1962,28 @@ body.mobile-tv.compact-mobile .due-cell {
 .route-node.field-exception .route-report .route-worker { color: #8b9caf; }
 .badge.field-exception { color: #c084fc; border-color: #c084fc; }
 .field-overdue { color: #ff637c; margin-left: 4px; font-size: 12px; }
+
+
+.dispatch-report-backdrop { position: fixed; inset: 0; z-index: 2500; background: #000b; display: grid; place-items: center; padding: 16px; }
+.dispatch-report-dialog { width: min(700px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; background: #0b202b; border: 1px solid #32c9dd; color: #e6f3fa; padding: 22px; box-sizing: border-box; }
+.dispatch-report-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dispatch-report-dialog h2 { font-size: 24px; }
+.dispatch-report-dialog button { min-height: 46px; padding: 10px 18px; color: #e6f3fa; background: #193b4b; border: 1px solid #6594a5; cursor: pointer; }
+.dispatch-report-dialog button.primary { background: #087f8c; border-color: #27daed; }
+.dispatch-report-dialog button:disabled { opacity: .5; cursor: wait; }
+.proxy-actions, .proxy-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.proxy-form label { display: grid; gap: 8px; margin: 12px 0; font-size: 16px; }
+.proxy-form input, .proxy-form select, .proxy-form textarea { box-sizing: border-box; width: 100%; min-height: 44px; font: inherit; color: #e6f3fa; background: #071820; border: 1px solid #527886; padding: 10px; }
+.proxy-form textarea { min-height: 80px; }
+.proxy-error { color: #ff9e9e; white-space: pre-wrap; }
+.proxy-attribution { color: #f3d475; }
+.dispatch-hold-progress { position: absolute; top: -28px; left: 0; z-index: 5; white-space: nowrap; color: #fff; background: #164653; padding: 5px; font-size: 12px; pointer-events: none; }
+.dispatch-hold-progress::after { content: ""; display: block; height: 4px; background: #26d8eb; transform-origin: left; animation: dispatch-hold 5s linear forwards; }
+@keyframes dispatch-hold { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+body.dispatch-board .route-node[data-route-id] { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+@media (max-width: 600px) { .proxy-fields { grid-template-columns: 1fr; } .dispatch-report-dialog { padding: 14px; } }
+
+.dispatch-date-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 7px; }
+.dispatch-date-field input { min-width: 0; color-scheme: dark; }
+.dispatch-date-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 12px; border: 1px solid #27daed; background: #0b5965; color: #f4fbff; font: inherit; cursor: pointer; white-space: nowrap; }
+.dispatch-date-button:focus-visible { outline: 2px solid #f4fbff; outline-offset: 2px; }

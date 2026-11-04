@@ -18,7 +18,6 @@ let processTimerKey = "";
 let routeTimerKey = "";
 let pdfJsPromise = null;
 let loadInFlight = false;
-const dispatchClickTimers = new WeakMap();
 let queuedLoadResolvers = [];
 
 function isMobileTv() {
@@ -156,10 +155,7 @@ function orderRow(order, mobileMode = false) {
     const planText = mobileMode ? mobilePlanText(route) : plannedRange(route);
     const planClass = mobileMode && mobilePlanHidden(route) ? " mobile-plan-hidden" : "";
     const nodeClass = statusNodeClass(route, order);
-    const dispatchClickable = isDispatchBoard() && (
-      (nodeClass === "" && ["待开始", "暂停"].includes(route.status)) ||
-      (nodeClass === "active" && route.status === "进行中")
-    );
+    const dispatchClickable = isDispatchBoard() && route.status !== "已完成";
     const scheduleEditable = isDispatchBoard() && route.status !== "已完成";
     return `
       <div class="route-node ${nodeClass} ${route.lastReportScheduleStatus || ""}${dispatchClickable ? " dispatch-clickable" : ""}"${dispatchClickable ? ` data-route-id="${esc(route.id)}" data-route-status="${esc(route.status)}"` : ""}>
@@ -556,6 +552,7 @@ function trendChart(trend = []) {
 }
 
 function render(data, { preserveScroll = false } = {}) {
+  if (typeof dispatchInteractionBlocked === "function" && dispatchInteractionBlocked()) { dispatchRefreshDeferred = true; return; }
   const mobileMode = isMobileTv();
   const savedScrollY = mobileMode && preserveScroll ? window.scrollY : 0;
   const savedRouteScroll = mobileMode && preserveScroll ? captureMobileRouteScroll() : {};
@@ -704,6 +701,7 @@ async function loadRemainingOrders(baseParams, total, generation, initialOrders)
   const orders = [...initialOrders];
   const knownIds = new Set(orders.map((item) => item.id));
   for (let offset = TV_ORDER_BATCH_SIZE; offset < total; offset += TV_ORDER_BATCH_SIZE) {
+    if (generation !== tvState.loadGeneration) return null;
     const params = new URLSearchParams(baseParams);
     params.set("offset", String(offset));
     params.set("limit", String(TV_ORDER_BATCH_SIZE));
@@ -719,6 +717,8 @@ async function loadRemainingOrders(baseParams, total, generation, initialOrders)
 }
 
 async function load() {
+  if (typeof dispatchInteractionBlocked === "function" && dispatchInteractionBlocked()) { dispatchRefreshDeferred = true; return; }
+  if (typeof dispatchInteractionBlocked === "function") dispatchRefreshDeferred = false;
   if (loadInFlight) return new Promise((resolve) => queuedLoadResolvers.push(resolve));
   loadInFlight = true;
   const generation = ++tvState.loadGeneration;
@@ -733,10 +733,11 @@ async function load() {
       params.set("limit", String(TV_ORDER_BATCH_SIZE));
     }
     const endpoint = `/api/tv-dashboard?${params}`;
-    const res = await fetch(endpoint);
+    const res = await fetch(endpoint, { cache: "no-store" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "看板加载失败");
     if (generation !== tvState.loadGeneration) return;
+    if (typeof dispatchInteractionBlocked === "function" && dispatchInteractionBlocked()) { dispatchRefreshDeferred = true; return; }
     const initialLoad = !hadData;
     if (!mobileMode || initialLoad) {
       tvState.data = data;
@@ -746,6 +747,7 @@ async function load() {
         const initialCount = data.activeOrders.length;
         const orders = await loadRemainingOrders(params, data.activeOrderTotal, generation, data.activeOrders);
         if (!orders || generation !== tvState.loadGeneration) return;
+        if (typeof dispatchInteractionBlocked === "function" && dispatchInteractionBlocked()) { dispatchRefreshDeferred = true; return; }
         const additions = orders.slice(initialCount);
         const orderList = tvRoot.querySelector(".orders .order-list");
         if (orderList && additions.length) {
@@ -758,6 +760,7 @@ async function load() {
 
     const orders = await loadRemainingOrders(params, Number(data.activeOrderTotal || 0), generation, data.activeOrders);
     if (!orders || generation !== tvState.loadGeneration) return;
+    if (typeof dispatchInteractionBlocked === "function" && dispatchInteractionBlocked()) { dispatchRefreshDeferred = true; return; }
     data.activeOrders = orders;
     if (dashboardContentKey(data) !== dashboardContentKey(tvState.data)) {
       tvState.data = data;
@@ -769,6 +772,8 @@ async function load() {
     const clock = document.getElementById("clock");
     if (clock) clock.textContent = clockText(data.generatedAt);
   } catch (error) {
+    if (generation !== tvState.loadGeneration) return;
+    if (tvState.data && isDispatchBoard()) showDispatchMessage("看板刷新失败，已保留当前状态，请稍后重试", true);
     if (!tvState.data) tvRoot.innerHTML = `<section class="loading">看板加载失败：${esc(error.message)}</section>`;
   } finally {
     loadInFlight = false;
@@ -791,35 +796,28 @@ function showDispatchMessage(message, isError = false) {
   setTimeout(() => node.remove(), 2200);
 }
 
-async function toggleDispatchRoute(node) {
-  if (node.classList.contains("dispatch-pending")) return;
-  node.classList.add("dispatch-pending");
-  try {
-    const token = viewerToken();
-    const response = await fetch("/api/dispatch-board/route-toggle", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        routeId: node.dataset.routeId,
-        expectedStatus: node.dataset.routeStatus
-      })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "派工操作失败");
-    showDispatchMessage(data.route.status === "进行中" ? "工序已开始" : "工序已暂停");
-    await load();
-  } catch (error) {
-    node.classList.remove("dispatch-pending");
-    showDispatchMessage(error.message, true);
-    await load();
+function applyDispatchRoute(updatedRoute) {
+  tvState.loadGeneration += 1;
+  if (!tvState.data || !updatedRoute) return;
+  for (const order of tvState.data.activeOrders || []) {
+    const route = order.routes.find((item) => item.id === updatedRoute.id);
+    if (route) Object.assign(route, updatedRoute);
   }
+  render(tvState.data, { preserveScroll: true });
 }
 
-function closeDispatchEditDialog() {
-  document.querySelector(".dispatch-edit-backdrop")?.remove();
+function applyDispatchDashboard(dashboard) {
+  tvState.loadGeneration += 1;
+  tvState.data = { ...dashboard, activeOrderTotal: dashboard.activeOrders.length };
+  render(tvState.data, { preserveScroll: true });
+  syncCarousel(dashboard.settings || {});
+}
+
+function closeDispatchEditDialog(refresh = true) {
+  const modal = document.querySelector(".dispatch-edit-backdrop");
+  if (modal?.dataset.busy === "true") return;
+  modal?.remove();
+  if (refresh && dispatchRefreshDeferred) void load();
 }
 
 function dispatchDateLabel(value) {
@@ -863,15 +861,19 @@ function renderDispatchEditForm(modal) {
       <header><h2>${title}</h2><button type="button" data-dispatch-edit-close>关闭</button></header>
       <p class="dispatch-edit-subject">${esc(subject)}</p>
       ${isSchedule
-        ? `<label>计划开始日<input type="date" data-edit-start value="${esc(start)}"></label><label>计划结束日<input type="date" data-edit-end value="${esc(end)}"></label><p class="dispatch-edit-hint">两项都留空表示未排期；开始日不得晚于结束日。</p><p class="dispatch-edit-preview">排期：<span data-edit-preview>${esc(dispatchDateLabel(start))} → ${esc(dispatchDateLabel(end))}</span></p>`
-        : `<label>当前交期<input type="date" value="${esc(due)}" disabled></label><label>新交期<input type="date" data-edit-due value="${esc(due)}"></label><p class="dispatch-edit-preview">交期：${esc(dispatchDateLabel(due))} → <span data-edit-preview>${esc(dispatchDateLabel(due))}</span></p><p class="dispatch-edit-hint">工序排期保持不变。</p>`}
+        ? `<label for="dispatch-plan-start">计划开始日</label><div class="dispatch-date-field"><input id="dispatch-plan-start" type="date" min="0001-01-01" max="9999-12-31" data-edit-start value="${esc(start)}"><button type="button" class="dispatch-date-button" data-dispatch-date-picker="start" aria-label="选择计划开始日"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg><span>选择日期</span></button></div><label for="dispatch-plan-end">计划结束日</label><div class="dispatch-date-field"><input id="dispatch-plan-end" type="date" min="0001-01-01" max="9999-12-31" data-edit-end value="${esc(end)}"><button type="button" class="dispatch-date-button" data-dispatch-date-picker="end" aria-label="选择计划结束日"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg><span>选择日期</span></button></div><p class="dispatch-edit-hint">两项都留空表示未排期；开始日不得晚于结束日。</p><p class="dispatch-edit-preview">排期：<span data-edit-preview>${esc(dispatchDateLabel(start))} → ${esc(dispatchDateLabel(end))}</span></p>`
+        : `<label>当前交期<input type="date" value="${esc(due)}" disabled></label><label for="dispatch-new-due">新交期</label><div class="dispatch-date-field"><input id="dispatch-new-due" type="date" min="0001-01-01" max="9999-12-31" data-edit-due value="${esc(due)}"><button type="button" class="dispatch-date-button" data-dispatch-date-picker="due" aria-label="选择新交期"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg><span>选择日期</span></button></div><p class="dispatch-edit-preview">交期：${esc(dispatchDateLabel(due))} → <span data-edit-preview>${esc(dispatchDateLabel(due))}</span></p><p class="dispatch-edit-hint">工序排期保持不变。</p>`}
       <p class="dispatch-edit-error" role="alert"></p>
       <div class="dispatch-edit-actions"><button type="button" data-dispatch-edit-cancel>取消</button><button type="button" class="primary" data-dispatch-edit-save>保存</button></div>
     </section>`;
 }
 
 async function saveDispatchEdit(modal) {
+  if (modal.dataset.busy === "true") return;
   const isSchedule = modal.dataset.editKind === "schedule";
+  for (const input of modal.querySelectorAll('input[type="date"]')) {
+    if (!input.checkValidity()) { input.reportValidity(); return; }
+  }
   const start = modal.querySelector("[data-edit-start]")?.value || "";
   const end = modal.querySelector("[data-edit-end]")?.value || "";
   const due = modal.querySelector("[data-edit-due]")?.value || "";
@@ -884,12 +886,13 @@ async function saveDispatchEdit(modal) {
     errorNode.textContent = "请选择新的交期";
     return;
   }
-  const button = modal.querySelector("[data-dispatch-edit-save]");
-  button.disabled = true;
+  const controls = [...modal.querySelectorAll("button:not(:disabled), input:not(:disabled)")];
+  modal.dataset.busy = "true";
+  controls.forEach((control) => { control.disabled = true; });
   errorNode.textContent = "";
   const payload = isSchedule
     ? { routeId: modal.dataset.targetId, expectedStartDate: modal.dataset.beforeStart, expectedEndDate: modal.dataset.beforeEnd, plannedStartDate: start, plannedEndDate: end }
-    : { orderId: modal.dataset.targetId, expectedDueDate: modal.dataset.beforeDue, dueDate: due };
+    : { orderId: modal.dataset.targetId, expectedDueDate: modal.dataset.beforeDue, dueDate: due, source: sourceView() };
   try {
     const response = await fetch(isSchedule ? "/api/dispatch-board/route-schedule" : "/api/dispatch-board/order-due-date", {
       method: "POST",
@@ -898,11 +901,22 @@ async function saveDispatchEdit(modal) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "保存失败，请重试");
-    closeDispatchEditDialog();
+    modal.dataset.busy = "false";
+    closeDispatchEditDialog(false);
+    if (data.dashboard) applyDispatchDashboard(data.dashboard);
+    if (isSchedule && data.route && tvState.data) {
+      for (const order of tvState.data.activeOrders || []) {
+        const route = order.routes.find((item) => item.id === data.route.id);
+        if (route) Object.assign(route, data.route, { scheduleOverdue: data.route.status !== "已完成" && Boolean(data.route.plannedEndDate) && data.route.plannedEndDate < new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai" }).format(new Date()) });
+      }
+      tvState.loadGeneration += 1;
+      render(tvState.data, { preserveScroll: true });
+    }
     showDispatchMessage("已保存，正在刷新看板");
     await load();
   } catch (error) {
-    button.disabled = false;
+    modal.dataset.busy = "false";
+    controls.forEach((control) => { control.disabled = false; });
     errorNode.textContent = error.message;
   }
 }
@@ -1035,9 +1049,33 @@ function syncCarousel(settings) {
 }
 
 load();
+if (viewerToken()) {
+  const scheduleEvents = new EventSource(`/api/schedule-events?${new URLSearchParams({ viewerToken: viewerToken() })}`);
+  let scheduleRefreshTimer;
+  const refreshSchedule = () => {
+    clearTimeout(scheduleRefreshTimer);
+    tvState.loadGeneration += 1;
+    scheduleRefreshTimer = setTimeout(() => load(), 100);
+  };
+  scheduleEvents.addEventListener("schedule", refreshSchedule);
+  scheduleEvents.addEventListener("ready", refreshSchedule);
+  window.addEventListener("pagehide", () => { clearTimeout(scheduleRefreshTimer); scheduleEvents.close(); });
+}
 document.addEventListener("click", (event) => {
   const editModal = event.target.closest(".dispatch-edit-backdrop");
   if (editModal) {
+    const pickerButton = event.target.closest("[data-dispatch-date-picker]");
+    if (pickerButton) {
+      const input = editModal.querySelector(pickerButton.dataset.dispatchDatePicker === "start" ? "[data-edit-start]" : pickerButton.dataset.dispatchDatePicker === "end" ? "[data-edit-end]" : "[data-edit-due]");
+      input.focus();
+      try {
+        if (typeof input.showPicker === "function") input.showPicker();
+        else input.click();
+      } catch {
+        editModal.querySelector(".dispatch-edit-error").textContent = "请点击日期输入框中的日历图标选择日期，或直接输入年月日。";
+      }
+      return;
+    }
     if (event.target.closest("[data-dispatch-edit-close], [data-dispatch-edit-cancel]") || event.target === editModal) {
       closeDispatchEditDialog();
       return;
@@ -1089,29 +1127,14 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     return;
   }
-  const node = event.target.closest(".route-node.dispatch-clickable");
-  if (node) {
-    const pending = dispatchClickTimers.get(node);
-    if (pending) clearTimeout(pending);
-    dispatchClickTimers.set(node, setTimeout(() => {
-      dispatchClickTimers.delete(node);
-      toggleDispatchRoute(node);
-    }, 500));
-  }
+
 });
 document.addEventListener("dblclick", (event) => {
   if (!isDispatchBoard()) return;
-  const scheduleNode = event.target.closest("[data-dispatch-schedule]");
   const dueNode = event.target.closest("[data-dispatch-due-date]");
-  if (!scheduleNode && !dueNode) return;
+  if (!dueNode) return;
   event.preventDefault();
-  const routeNode = scheduleNode?.closest(".route-node.dispatch-clickable");
-  const pending = routeNode && dispatchClickTimers.get(routeNode);
-  if (pending) {
-    clearTimeout(pending);
-    dispatchClickTimers.delete(routeNode);
-  }
-  beginDispatchEditFromNode(scheduleNode || dueNode);
+  beginDispatchEditFromNode(dueNode);
 });
 document.addEventListener("input", (event) => {
   const modal = event.target.closest(".dispatch-edit-backdrop");
@@ -1141,3 +1164,14 @@ setInterval(() => {
   if (!clock) return;
   clock.textContent = clockText();
 }, 1000);
+
+
+document.addEventListener("input", (event) => {
+  const input = event.target;
+  if (!input.matches?.("[data-edit-start], [data-edit-end], [data-edit-due]")) return;
+  if (/^\d{5,}-/.test(input.value)) {
+    input.value = input.dataset.validDate || input.defaultValue;
+    const error = input.closest(".dispatch-edit-dialog")?.querySelector(".dispatch-edit-error");
+    if (error) error.textContent = "年份最多输入4位数字";
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(input.value)) input.dataset.validDate = input.value;
+});
