@@ -58,12 +58,15 @@ function esc(value) {
 
 function statusNodeClass(route, order) {
   if (route.fieldExceptionActive) return "field-exception";
-  if (route.status === "已完成") return "done";
-  if (route.scheduleOverdue) return "delay";
+  const completed = Number(route.completedQty || 0);
+  const partiallyReported = completed > 0 && completed < Number(route.planQty);
+  if (route.status === "已完成" && !partiallyReported) return "done";
+  if (route.scheduleOverdue && !partiallyReported) return "delay";
   if (route.qualityIssueActive) return "quality-issue";
   if (route.status === "异常" || route.status === "返工") return "error";
+  if (partiallyReported) return "reported";
   if (order.dueLevel === "overdue") return "delay";
-  if (Number(route.completedQty || 0) > 0 || route.lastReportTime) return "reported";
+  if (completed > 0 || route.lastReportTime) return "reported";
   if (route.status === "进行中") return "active";
   return "";
 }
