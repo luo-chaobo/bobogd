@@ -3,9 +3,11 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
+const { AsyncLocalStorage } = require("async_hooks");
 const { weappImageType } = require("./lib/weapp-image");
 const { readRawBody, parseBody } = require("./lib/request-body");
 const { normalizeUnitPrice, calculateOrderTotal, identifyFinancialAccessUsers, financialAccessUserIds, createSerialQueue, hasOrderNumberConflict, normalizeOrderNumber } = require("./lib/order-financials");
+function auditValues(item) { return require("./lib/audit-store").auditValues(item); }
 
 const LOCAL_CONFIG_FILE = path.join(__dirname, "config.local.json");
 if (fs.existsSync(LOCAL_CONFIG_FILE)) {
@@ -40,6 +42,7 @@ const WX_CODE_ENV_VERSION = ["develop", "trial", "release"].includes(process.env
   : "trial";
 const WECHAT_API_BASE_URL = String(process.env.WECHAT_API_BASE_URL || "https://api.weixin.qq.com").replace(/\/$/, "");
 const DB_DRIVER = String(process.env.DB_DRIVER || "json").trim().toLowerCase();
+const ROW_RELEASE = DB_DRIVER === "mysql_rows" && process.env.BOBO_ROW_RELEASE === "1";
 const FUTURE_WEBHOOK_URL = String(process.env.FUTURE_WEBHOOK_URL || "").trim();
 const BOBO_INTEGRATION_SECRET = String(process.env.BOBO_INTEGRATION_SECRET || "").trim();
 const PLATFORM_SOURCE_CHANNELS = new Set(["website", "order_platform", "miniprogram"]);
@@ -52,7 +55,7 @@ const RESTRICTED_VIEW_PHONES = new Set([
   "15257457485",
   "15728038503",
 ]);
-const AUDIT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const TV_VIEW_TOKEN_SECRET = String(process.env.TV_VIEW_TOKEN_SECRET || WX_APP_SECRET).trim()
   || crypto.randomBytes(32).toString("hex");
 const TV_VIEW_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
@@ -61,6 +64,8 @@ let wechatAccessTokenCache = { value: "", expiresAt: 0 };
 let wechatAccessTokenPromise = null;
 const weappCodePromises = new Map();
 let mysqlPool = null;
+const rowTrialContext = new AsyncLocalStorage();
+const WEAPP_QR_ROUTE = /^\/api\/qr\/route\/([^/]+)\/weapp\.png$/;
 let databaseRevision = 0;
 let tvDatabaseCache = { value: null, expiresAt: 0 };
 const tvDashboardCache = new Map();
@@ -402,15 +407,181 @@ async function ensureMysqlStateTable() {
   `);
 }
 
+async function ensureMysqlAuditTable() {
+  const pool = createMysqlPool();
+  const { CREATE_AUDIT_TABLE } = require('./lib/audit-store');
+  await pool.execute(CREATE_AUDIT_TABLE);
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS bobo_schema_migrations (
+      name VARCHAR(120) PRIMARY KEY,
+      applied_at DATETIME NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  const database = String(process.env.MYSQL_DATABASE || "").trim();
+  const [payloadColumns] = await pool.execute(
+    "SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema = ? AND table_name = 'bobo_audit_logs_v2' AND column_name = 'payload'",
+    [database]
+  );
+  if (!payloadColumns.length) throw new Error("审计目标表缺少原始记录列，迁移已停止");
+  const indexes = [
+    ["idx_audit_created", "created_at"],
+    ["idx_audit_actor_created", "actor_id, created_at"],
+    ["idx_audit_action_created", "action, created_at"],
+  ];
+  for (const [name, columns] of indexes) {
+    const [rows] = await pool.execute(
+      "SELECT INDEX_NAME FROM information_schema.statistics WHERE table_schema = ? AND table_name = 'bobo_audit_logs_v2' AND index_name = ? LIMIT 1",
+      [database, name]
+    );
+    if (!rows.length) await pool.query(`ALTER TABLE bobo_audit_logs_v2 ADD INDEX ${name} (${columns})`);
+  }
+}
+
+async function moveAuditLogsOutOfState() {
+  const pool = createMysqlPool();
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [migrationRows] = await connection.execute(
+      "SELECT name FROM bobo_schema_migrations WHERE name = ?",
+      ["audit_logs_out_of_app_state_v1"]
+    );
+    if (migrationRows.length) {
+      await connection.commit();
+      return;
+    }
+    const [[existingAudit]] = await connection.execute("SELECT COUNT(*) AS total FROM bobo_audit_logs_v2");
+    if (Number(existingAudit.total) !== 0) throw new Error("审计目标表已有数据但缺少迁移标记，迁移已停止");
+    const [rows] = await connection.execute(
+      "SELECT value_json FROM app_state WHERE name = ? FOR UPDATE",
+      [MYSQL_STATE_KEY]
+    );
+    if (!rows.length) {
+      await connection.execute(
+        "INSERT INTO bobo_schema_migrations (name, applied_at) VALUES (?, NOW())",
+        ["audit_logs_out_of_app_state_v1"]
+      );
+      await connection.commit();
+      return;
+    }
+    const state = typeof rows[0].value_json === "string" ? JSON.parse(rows[0].value_json) : rows[0].value_json;
+    const cutoff = Date.now() - AUDIT_RETENTION_MS;
+    if (state.auditLogs != null && !Array.isArray(state.auditLogs)) {
+      throw new Error("审计日志格式无效，迁移已停止，请先核对原始备份");
+    }
+    const auditLogs = state.auditLogs || [];
+    const ids = new Set();
+    for (const item of auditLogs) {
+      if (!item || typeof item.id !== "string" || !item.id.trim() || ids.has(item.id)) {
+        throw new Error("审计日志存在无效或重复 ID、无效时间，迁移已停止，请先核对原始备份");
+      }
+      auditValues(item);
+      ids.add(item.id);
+    }
+    const logs = auditLogs.filter((item) => new Date(item.createdAt).getTime() >= cutoff);
+    for (let offset = 0; offset < logs.length; offset += 250) {
+      const batch = logs.slice(offset, offset + 250);
+      const values = batch.map(auditValues);
+      const placeholders = batch.map(() => "(?, ?, ?, ?, ?, CAST(? AS JSON), ?, CAST(? AS JSON))").join(", ");
+      await connection.execute(
+        `INSERT INTO bobo_audit_logs_v2 (id, actor_id, action, target_type, target_id, detail, created_at, payload) VALUES ${placeholders} ON DUPLICATE KEY UPDATE actor_id=VALUES(actor_id), action=VALUES(action), target_type=VALUES(target_type), target_id=VALUES(target_id), detail=VALUES(detail), created_at=VALUES(created_at), payload=VALUES(payload)`,
+        values.flat()
+      );
+    }
+    const [updated] = await connection.execute(
+      "UPDATE app_state SET value_json = JSON_REMOVE(value_json, '$.auditLogs'), updated_at = NOW() WHERE name = ?",
+      [MYSQL_STATE_KEY]
+    );
+    await connection.execute(
+      "INSERT INTO bobo_schema_migrations (name, applied_at) VALUES (?, NOW())",
+      ["audit_logs_out_of_app_state_v1"]
+    );
+    await connection.execute("DELETE FROM bobo_audit_logs_v2 WHERE created_at < ?", [mysqlDateTime(cutoff)]);
+    await connection.commit();
+    if (updated.affectedRows) {
+      databaseRevision += 1;
+      tvDatabaseCache = { value: null, expiresAt: 0 };
+      tvDashboardCache.clear();
+    }
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+function mysqlDateTime(value) {
+  const date = new Date(value || 0);
+  if (!Number.isFinite(date.getTime())) throw new TypeError("audit log createdAt is invalid");
+  return date.toISOString().slice(0, 23).replace("T", " ");
+}
+
+let rowWebhookSender;
+
+async function verifyRowRelease() {
+  const expectedUuid = String(process.env.BOBO_ROW_SERVER_UUID || "").toLowerCase();
+  const expectedDatabase = process.env.BOBO_ROW_DATABASE;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(expectedUuid) ||
+      !expectedDatabase || expectedDatabase !== process.env.MYSQL_DATABASE ||
+      process.env.BOBO_SYNTHETIC_ROW_TRIAL === "1" ||
+      process.env.BOBO_SYNTHETIC_TASK_DIRECT === "1" ||
+      process.env.BOBO_SYNTHETIC_TASK_SHADOW === "1") {
+    throw new Error("行存储发布目标配置无效");
+  }
+  const pool = createMysqlPool();
+  const [[target]] = await pool.query("SELECT @@server_uuid AS uuid, DATABASE() AS name");
+  if (String(target.uuid).toLowerCase() !== expectedUuid || target.name !== expectedDatabase) {
+    throw new Error("行存储发布数据库身份不匹配");
+  }
+  const [[legacy]] = await pool.query("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'app_state'");
+  if (Number(legacy.count) !== 0) throw new Error("行存储发布必须使用独立目标库");
+  const [[lock]] = await pool.query("SELECT COUNT(*) AS count FROM bobo_state_write_lock WHERE id=1");
+  if (Number(lock.count) !== 1) throw new Error("行存储发布数据库缺少写锁");
+  if (process.env.BOBO_ROW_WEBHOOK_ENABLED === "1") {
+    const { createPlatformWebhookSender } = require("./lib/platform-webhook-sender");
+    rowWebhookSender = createPlatformWebhookSender({ url: FUTURE_WEBHOOK_URL, secret: BOBO_INTEGRATION_SECRET });
+  }
+}
+
 async function ensureDb() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   fs.mkdirSync(DRAWING_DIR, { recursive: true });
   fs.mkdirSync(THUMBNAIL_DIR, { recursive: true });
   fs.mkdirSync(CAD_PREVIEW_DIR, { recursive: true });
+  if (DB_DRIVER === "mysql_rows") {
+    if (ROW_RELEASE) {
+      await verifyRowRelease();
+      return;
+    }
+    if (process.env.BOBO_SYNTHETIC_ROW_TRIAL !== "1" || process.env.MYSQL_HOST !== "127.0.0.1" || process.env.MYSQL_PORT !== "33317" || !/^bobo_row_trial_[a-z0-9]+$/.test(process.env.MYSQL_DATABASE || "")) {
+      throw new Error("行存储试验仅允许独立合成数据库");
+    }
+    if (FUTURE_WEBHOOK_URL || (BOBO_INTEGRATION_SECRET && (process.env.BOBO_SYNTHETIC_EXTERNAL_TRIAL !== "1" || !/^synthetic-[a-z0-9-]{8,80}$/.test(BOBO_INTEGRATION_SECRET)))) throw new Error("行存储试验只允许合成集成密钥");
+    const config = fs.readFileSync(path.join(ROOT, "local-mysql-isolated", "auto.cnf"), "utf8");
+    const expected = config.match(/^server-uuid\s*=\s*([0-9a-f-]+)/im)?.[1]?.toLowerCase();
+    const pool = createMysqlPool();
+    const [[info]] = await pool.query("SELECT @@server_uuid AS uuid");
+    if (!expected || String(info.uuid).toLowerCase() !== expected) throw new Error("行存储试验数据库身份不匹配");
+    const [[lock]] = await pool.query("SELECT COUNT(*) AS count FROM bobo_state_write_lock WHERE id=1");
+    if (Number(lock.count) !== 1) throw new Error("行存储试验数据库缺少写锁");
+    return;
+  }
   if (DB_DRIVER === "mysql") {
     await ensureMysqlStateTable();
     const pool = createMysqlPool();
+    let migrationRows;
+    try {
+      [migrationRows] = await pool.execute(
+        "SELECT name FROM bobo_schema_migrations WHERE name = ?",
+        ["audit_logs_out_of_app_state_v1"]
+      );
+    } catch (error) {
+      if (error.code === "ER_NO_SUCH_TABLE") throw new Error("MySQL 尚未执行审计日志拆表迁移；请先运行 node server.js --migrate-audit-logs");
+      throw error;
+    }
+    if (!migrationRows.length) throw new Error("MySQL 尚未执行审计日志拆表迁移；请先运行 node server.js --migrate-audit-logs");
     const [rows] = await pool.execute("SELECT name FROM app_state WHERE name = ?", [MYSQL_STATE_KEY]);
     if (rows.length) return;
     if (fs.existsSync(DB_FILE)) {
@@ -459,13 +630,18 @@ async function ensureDb() {
 
 async function readDb(maxAgeMs = 0) {
   const readRevision = databaseRevision;
-  if (maxAgeMs > 0 && tvDatabaseCache.value && tvDatabaseCache.expiresAt > Date.now()) {
+  if (DB_DRIVER !== "mysql_rows" && maxAgeMs > 0 && tvDatabaseCache.value && tvDatabaseCache.expiresAt > Date.now()) {
     return tvDatabaseCache.value;
   }
   let db;
-  if (DB_DRIVER === "mysql") {
+  if (DB_DRIVER === "mysql_rows") {
+    const context = rowTrialContext.getStore();
+    if (!context) throw new Error("行存储试验缺少事务上下文");
+    db = context.state;
+    if (context.scoped) return db;
+  } else if (DB_DRIVER === "mysql") {
     const pool = createMysqlPool();
-    const [rows] = await pool.execute("SELECT value_json FROM app_state WHERE name = ?", [MYSQL_STATE_KEY]);
+    const [rows] = await pool.execute("SELECT JSON_REMOVE(value_json, '$.auditLogs') AS value_json FROM app_state WHERE name = ?", [MYSQL_STATE_KEY]);
     if (!rows.length) throw new Error("MySQL app_state 未初始化，请先执行迁移或确认 data/db.json 可用于首次导入");
     db = typeof rows[0].value_json === "string" ? JSON.parse(rows[0].value_json) : rows[0].value_json;
   } else {
@@ -690,18 +866,8 @@ async function readDb(maxAgeMs = 0) {
   db.processes.sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "zh-Hans-CN"));
   if (processOrderBeforeSort !== db.processes.map((process) => process.id).join(",")) changed = true;
   if (changed) await writeDb(db);
-  // Normalize legacy in-flight routes without writing from a dashboard read.
-  const reopenableOrderIds = new Set(db.orders.filter(canReopenOrder).map((order) => order.id));
-  const activeWorkOrderIds = new Set(db.workOrders
-    .filter((workOrder) => ["生产中", "异常"].includes(workOrder.status) && workOrder.creationStatus !== "pending")
-    .filter((workOrder) => reopenableOrderIds.has(workOrder.orderId))
-    .map((workOrder) => workOrder.id));
-  const reopenedWorkOrders = new Set();
-  for (const route of db.routes) {
-    if (activeWorkOrderIds.has(route.workOrderId) && reopenIncompleteRoute(db, route)) reopenedWorkOrders.add(route.workOrderId);
-  }
-  for (const workOrderId of reopenedWorkOrders) syncWorkOrder(db, workOrderId);
-  if (maxAgeMs > 0 && readRevision === databaseRevision) tvDatabaseCache = { value: db, expiresAt: Date.now() + maxAgeMs };
+  if (DB_DRIVER !== "mysql_rows") reopenInFlightRoutes(db);
+  if (DB_DRIVER !== "mysql_rows" && maxAgeMs > 0 && readRevision === databaseRevision) tvDatabaseCache = { value: db, expiresAt: Date.now() + maxAgeMs };
   return db;
 }
 
@@ -862,12 +1028,39 @@ async function writeDb(db) {
   databaseRevision += 1;
   tvDatabaseCache = { value: null, expiresAt: 0 };
   tvDashboardCache.clear();
+  if (DB_DRIVER === "mysql_rows") {
+    const context = rowTrialContext.getStore();
+    if (!context || context.state !== db) throw new Error("行存储试验的状态不属于当前事务");
+    if (context.readOnly || context.readOnlyConnection) throw new Error("只读请求不可写入");
+    context.saved = true;
+    return;
+  }
   if (DB_DRIVER === "mysql") {
     const pool = createMysqlPool();
-    await pool.execute(
-      "REPLACE INTO app_state (name, value_json, updated_at) VALUES (?, CAST(? AS JSON), NOW())",
-      [MYSQL_STATE_KEY, JSON.stringify(db)]
-    );
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const state = { ...db };
+      const auditLogs = Array.isArray(state.auditLogs) ? state.auditLogs : [];
+      delete state.auditLogs;
+      await connection.execute(
+        "REPLACE INTO app_state (name, value_json, updated_at) VALUES (?, CAST(? AS JSON), NOW())",
+        [MYSQL_STATE_KEY, JSON.stringify(state)]
+      );
+      for (const item of auditLogs) {
+        await connection.execute(
+          "INSERT INTO bobo_audit_logs_v2 (id, actor_id, action, target_type, target_id, detail, created_at, payload) VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), ?, CAST(? AS JSON)) ON DUPLICATE KEY UPDATE actor_id=VALUES(actor_id), action=VALUES(action), target_type=VALUES(target_type), target_id=VALUES(target_id), detail=VALUES(detail), created_at=VALUES(created_at), payload=VALUES(payload)",
+          auditValues(item)
+        );
+      }
+      await connection.execute("DELETE FROM bobo_audit_logs_v2 WHERE created_at < ?", [mysqlDateTime(Date.now() - AUDIT_RETENTION_MS)]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
     databaseRevision += 1;
     tvDatabaseCache = { value: null, expiresAt: 0 };
     tvDashboardCache.clear();
@@ -924,6 +1117,31 @@ function validExternalSignature(req, rawBody) {
 }
 
 
+async function readExternalOrder(req) {
+  if (!BOBO_INTEGRATION_SECRET) return { status: 503, error: "外部工单集成未启用" };
+  const rawBody = await readRawBody(req);
+  if (!validExternalSignature(req, rawBody)) return { status: 401, error: "外部集成签名无效" };
+  let input;
+  try { input = JSON.parse(rawBody) || {}; } catch { return { status: 400, error: "请求格式错误" }; }
+  input = {
+    externalOrderNumber: String(input.externalOrderNumber || "").trim(),
+    sourceChannel: String(input.sourceChannel || "").trim(),
+    customer: String(input.customer || "").trim(),
+    phone: String(input.phone || "").trim(),
+    quantity: Number(input.quantity),
+    expectedDate: normalizeDate(input.expectedDate),
+    description: String(input.description || "").trim(),
+    material: String(input.material || "").trim(),
+    dimensions: String(input.dimensions || "").trim(),
+    region: String(input.region || "").trim(),
+    deliveryAddress: String(input.deliveryAddress || "").trim(),
+  };
+  if (!input.externalOrderNumber || input.externalOrderNumber.length > 128 || !input.customer || !input.phone || !Number.isInteger(input.quantity) || input.quantity < 1 || !input.expectedDate) return { status: 422, error: "外部订单核心参数不合法或不完整" };
+  if (!PLATFORM_SOURCE_CHANNELS.has(input.sourceChannel)) return { status: 422, error: "平台渠道无效" };
+  const nonce = String(req.headers["x-integration-nonce"]);
+  return { input, nonce };
+}
+
 let externalOrderWrite = Promise.resolve();
 function serializeExternalOrder(task) {
   const result = externalOrderWrite.then(task, task);
@@ -933,6 +1151,7 @@ function serializeExternalOrder(task) {
 
 let deliveryWrite = Promise.resolve();
 function serializeDelivery(task) {
+  if (rowTrialContext.getStore()?.scoped) return task();
   const result = deliveryWrite.then(task, task);
   deliveryWrite = result.catch(() => {});
   return result;
@@ -1042,6 +1261,22 @@ function queuePlatformDeliveryCompleted(db, order, workOrder, delivery) {
 
 let processingPlatformWebhooks = false;
 async function processPlatformWebhooks() {
+  if (DB_DRIVER === "mysql_rows") {
+    if (processingPlatformWebhooks || !rowWebhookSender) return;
+    processingPlatformWebhooks = true;
+    try {
+      const { processOneOutbox } = require("./lib/outbox-worker");
+      for (let index = 0; index < 20; index++) {
+        const result = await processOneOutbox(createMysqlPool(), rowWebhookSender);
+        if (!result.claimed) break;
+      }
+    } catch (error) {
+      console.error("行存储回传队列处理失败", error.code || error.name);
+    } finally {
+      processingPlatformWebhooks = false;
+    }
+    return;
+  }
   if (processingPlatformWebhooks || !FUTURE_WEBHOOK_URL || !BOBO_INTEGRATION_SECRET) return;
   processingPlatformWebhooks = true;
   try {
@@ -1173,22 +1408,24 @@ function attachmentByUrl(db, url) {
   return db.attachments.find((item) => item.url === url) || null;
 }
 
-function workOrderHistoryItems(db, filters, includeCustomerFeedbacks = false) {
-  return db.workOrders
+function workOrderHistoryItems(db, filters, includeCustomerFeedbacks = false, includeDetails = true) {
+  const orders = new Map();
+  const customers = new Map();
+  for (const order of db.orders) if (!orders.has(order.id)) orders.set(order.id, order);
+  for (const customer of db.customers) if (!customers.has(customer.id)) customers.set(customer.id, customer);
+  const completedRoutes = new Map();
+  for (const route of db.routes) {
+    if (route.status !== "已完成") continue;
+    if (!completedRoutes.has(route.workOrderId)) completedRoutes.set(route.workOrderId, []);
+    completedRoutes.get(route.workOrderId).push(route);
+  }
+  const matched = db.workOrders
     .filter((item) => !filters.workOrderId || item.id === filters.workOrderId)
     .filter((item) => !filters.workNo || String(item.workNo || "").trim().toLowerCase() === filters.workNo)
     .map((workOrder) => {
-      const order = db.orders.find((item) => item.id === workOrder.orderId) || {};
+      const order = orders.get(workOrder.orderId) || {};
       const source = normalizedOrderSource(order);
-      const customer = db.customers.find((item) => item.id === order.customerId) || {};
-      const routes = db.routes.filter((item) => item.workOrderId === workOrder.id).sort((a, b) => a.sequence - b.sequence);
-      const drawings = (db.drawings || []).filter((item) => item.workOrderId === workOrder.id || item.orderId === order.id);
-      const qualityExceptions = db.exceptions
-        .filter((item) => item.workOrderId === workOrder.id && (item.qualityRouteId || item.source === "quality-inspection"))
-        .map((item) => ({ ...item, processName: db.routes.find((route) => route.id === item.issueRouteId || route.id === item.routeId)?.processName || item.type || "", reporterName: resolveUser(db, item.reporterId)?.name || "", resolvedByName: resolveUser(db, item.resolvedBy)?.name || "" }));
-      const customerFeedbacks = includeCustomerFeedbacks
-        ? db.customerFeedbacks.filter((item) => item.workOrderId === workOrder.id).map((item) => ({ ...item, processName: db.routes.find((route) => route.id === item.routeId)?.processName || "", reporterName: resolveUser(db, item.reporterId)?.name || "", resolvedByName: resolveUser(db, item.resolvedBy)?.name || "" }))
-        : null;
+      const customer = customers.get(order.customerId) || {};
       return {
         id: workOrder.id,
         workNo: workOrder.workNo,
@@ -1212,11 +1449,7 @@ function workOrderHistoryItems(db, filters, includeCustomerFeedbacks = false) {
         invoicedAt: order.invoicedAt || "",
         dueDate: order.dueDate || "",
         createdAt: workOrder.createdAt || order.createdAt || "",
-        completedAt: workOrderCompletedAt(db, workOrder),
-        routes,
-        drawings,
-        qualityExceptions,
-        ...(includeCustomerFeedbacks ? { customerFeedbacks } : {}),
+        completedAt: workOrderCompletedAt(db, workOrder, completedRoutes.get(workOrder.id) || []),
       };
     })
     .filter((item) => !filters.customerId || item.customerId === filters.customerId)
@@ -1230,6 +1463,19 @@ function workOrderHistoryItems(db, filters, includeCustomerFeedbacks = false) {
         .some((value) => String(value || "").toLowerCase().includes(filters.keyword));
     })
     .sort((a, b) => String(b[filters.dateType] || b.createdAt || b.dueDate).localeCompare(String(a[filters.dateType] || a.createdAt || a.dueDate)));
+  if (!includeDetails) return matched;
+  return matched.map((entry) => {
+    const orderId = entry.orderId || undefined;
+    const routes = db.routes.filter((item) => item.workOrderId === entry.id).sort((a, b) => a.sequence - b.sequence);
+    const drawings = (db.drawings || []).filter((item) => item.workOrderId === entry.id || item.orderId === orderId);
+    const qualityExceptions = db.exceptions
+      .filter((item) => item.workOrderId === entry.id && (item.qualityRouteId || item.source === "quality-inspection"))
+      .map((item) => ({ ...item, processName: db.routes.find((route) => route.id === item.issueRouteId || route.id === item.routeId)?.processName || item.type || "", reporterName: resolveUser(db, item.reporterId)?.name || "", resolvedByName: resolveUser(db, item.resolvedBy)?.name || "" }));
+    const customerFeedbacks = includeCustomerFeedbacks
+      ? db.customerFeedbacks.filter((item) => item.workOrderId === entry.id).map((item) => ({ ...item, processName: db.routes.find((route) => route.id === item.routeId)?.processName || "", reporterName: resolveUser(db, item.reporterId)?.name || "", resolvedByName: resolveUser(db, item.resolvedBy)?.name || "" }))
+      : null;
+    return { ...entry, routes, drawings, qualityExceptions, ...(includeCustomerFeedbacks ? { customerFeedbacks } : {}) };
+  });
 }
 
 function exceptionHistoryItems(db, filters) {
@@ -1289,7 +1535,7 @@ function saveDataUrlFile(body, options = {}) {
   const urlPrefix = options.urlPrefix || "/uploads";
   fs.mkdirSync(targetDir, { recursive: true });
   const fileName = `${id(options.prefix || "file")}.${ext === "jpeg" ? "jpg" : ext}`;
-  fs.writeFileSync(path.join(targetDir, fileName), Buffer.from(match[2], "base64"));
+  writeUploadFile(path.join(targetDir, fileName), Buffer.from(match[2], "base64"));
   return {
     fileName,
     url: `${urlPrefix}/${fileName}`,
@@ -1297,6 +1543,15 @@ function saveDataUrlFile(body, options = {}) {
     fileType: ext,
     originalName: sourceName || fileName,
   };
+}
+
+function writeUploadFile(file, contents) {
+  const rollbackFiles = rowTrialContext.getStore()?.rollbackFiles;
+  if (rollbackFiles && !fs.existsSync(file)) rollbackFiles.push(() => {
+    try { fs.rmSync(file, { force: true }); }
+    catch (error) { console.error("Unable to remove rolled-back upload", error.code); }
+  });
+  fs.writeFileSync(file, contents);
 }
 
 function isCadDrawing(fileType) {
@@ -1638,14 +1893,14 @@ async function generateCadPreview(drawing) {
   if (String(drawing.fileType || "").toLowerCase() === "dxf") {
     const previewSvg = dxfToSvg(fs.readFileSync(sourcePath, "utf8"), drawing.originalName || drawing.name || fileName);
     if (previewSvg) {
-      fs.writeFileSync(targetPath, previewSvg);
+      writeUploadFile(targetPath, previewSvg);
       return { previewUrl: `/uploads/previews/${path.basename(targetPath)}`, previewError: "" };
     }
   }
   for (const command of cadPreviewCommands(drawing.fileType)) {
     const preview = await runCadPreviewCommand(command, sourcePath, fileName);
     if (!preview.ok) continue;
-    fs.writeFileSync(targetPath, normalizeCadSvg(preview.svgText));
+    writeUploadFile(targetPath, normalizeCadSvg(preview.svgText));
     return { previewUrl: `/uploads/previews/${path.basename(targetPath)}`, previewError: "" };
   }
   return { previewUrl: "", previewError: "CAD 预览生成失败" };
@@ -1668,7 +1923,7 @@ function signTvViewerToken(user, audience = "mobile-tv") {
   return `${payload}.${signature}`;
 }
 
-function viewerFromToken(db, token) {
+function verifiedViewerClaims(token) {
   if (!TV_VIEW_TOKEN_SECRET || !token) return null;
   const [payload, signature, extra] = String(token).split(".");
   if (!payload || !signature || extra) return null;
@@ -1682,12 +1937,23 @@ function viewerFromToken(db, token) {
   if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!data.audience || Number(data.expiresAt) <= Date.now()) return null;
-    const user = db.users.find((item) => item.id === data.userId && item.active);
-    return user ? { user, audience: data.audience, expiresAt: Number(data.expiresAt) } : null;
+    if (typeof data.userId !== "string" || !data.audience || !Number.isFinite(Number(data.expiresAt)) || Number(data.expiresAt) <= Date.now()) return null;
+    return data;
   } catch {
     return null;
   }
+}
+
+function viewerFromToken(db, token) {
+  const claims = verifiedViewerClaims(token);
+  if (!claims) return null;
+  const user = db.users.find((item) => item.id === claims.userId && item.active);
+  return user ? { user, audience: claims.audience, expiresAt: Number(claims.expiresAt) } : null;
+}
+
+function dispatchViewerToken(req) {
+  const authorization = String(req.headers.authorization || "");
+  return authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
 }
 
 function tvViewerFromToken(db, token) {
@@ -1707,9 +1973,9 @@ function resolveUser(db, userId) {
   return deletedUser ? { ...deletedUser, deleted: true } : null;
 }
 
-function qualityRouteMeta(db, route) {
+function qualityRouteMeta(db, route, indexes = null) {
   if (route.processName !== "质检") return {};
-  const routes = db.routes.filter((item) => item.workOrderId === route.workOrderId);
+  const routes = indexes ? (indexes.routesByWorkOrder.get(route.workOrderId) || []) : db.routes.filter((item) => item.workOrderId === route.workOrderId);
   const sourceRoute = routes
     .filter((item) => item.processName !== "质检" && item.routeType !== "rework" && item.sequence < route.sequence)
     .sort((a, b) => b.sequence - a.sequence)[0];
@@ -1718,7 +1984,7 @@ function qualityRouteMeta(db, route) {
   const availableFromRework = reworkRoutes
     .filter((item) => item.status === "已完成")
     .reduce((sum, item) => sum + Number(item.completedQty || 0), 0);
-  const submittedQty = db.reports
+  const submittedQty = (indexes ? (indexes.reportsByRoute.get(route.id) || []) : db.reports)
     .filter((item) => item.routeId === route.id && item.reportType === "quality")
     .reduce((sum, item) => sum + Number(item.submittedQty || 0), 0);
   const remainingQty = Math.max(0, Number(route.planQty || 0) - Number(route.completedQty || 0));
@@ -1732,14 +1998,54 @@ function qualityRouteMeta(db, route) {
   };
 }
 
-function enrichRoute(db, route) {
-  return { ...route, ...qualityRouteMeta(db, route) };
+function buildQualityIndexes(db) {
+  const routesByWorkOrder = new Map();
+  const reportsByRoute = new Map();
+  for (const route of db.routes) {
+    if (!routesByWorkOrder.has(route.workOrderId)) routesByWorkOrder.set(route.workOrderId, []);
+    routesByWorkOrder.get(route.workOrderId).push(route);
+  }
+  for (const report of db.reports) {
+    if (!reportsByRoute.has(report.routeId)) reportsByRoute.set(report.routeId, []);
+    reportsByRoute.get(report.routeId).push(report);
+  }
+  return { routesByWorkOrder, reportsByRoute };
 }
 
-function workOrderCompletedAt(db, workOrder) {
+function enrichRoute(db, route, indexes = null) {
+  return { ...route, ...qualityRouteMeta(db, route, indexes) };
+}
+
+function buildMyTasks(db, user) {
+  const qualityIndexes = buildQualityIndexes(db);
+  const workOrdersById = new Map(db.workOrders.map((item) => [item.id, item]));
+  const ordersById = new Map(db.orders.map((item) => [item.id, item]));
+  const workOrderIdsWithDrawings = new Set();
+  const orderIdsWithDrawings = new Set();
+  db.drawings.forEach((drawing) => {
+    if (drawing.removedAt) return;
+    if (drawing.workOrderId) workOrderIdsWithDrawings.add(drawing.workOrderId);
+    if (drawing.orderId) orderIdsWithDrawings.add(drawing.orderId);
+  });
+  return (db.taskRoutes || db.routes).filter((route) => route.status !== "已完成" && canOperateRoute(user, route).ok).map((route) => {
+    const workOrder = workOrdersById.get(route.workOrderId) || {};
+    const order = ordersById.get(workOrder.orderId) || {};
+    return {
+      ...enrichRoute(db, route, qualityIndexes),
+      workOrder: {
+        workNo: workOrder.workNo || "",
+        productName: workOrder.productName || "",
+        order: { quantityUnit: order.quantityUnit },
+        hasDrawings: workOrderIdsWithDrawings.has(workOrder.id) || orderIdsWithDrawings.has(order.id),
+      },
+    };
+  });
+}
+
+function workOrderCompletedAt(db, workOrder, routes = db.routes) {
   if (workOrder.completedAt && !Number.isNaN(new Date(workOrder.completedAt).getTime())) return workOrder.completedAt;
   if (workOrder.status !== "已完成") return "";
-  return db.routes
+  return routes
     .filter((route) => route.workOrderId === workOrder.id && route.status === "已完成")
     .map((route) => route.completedAt || route.lastReportedAt || "")
     .filter(Boolean)
@@ -1747,45 +2053,49 @@ function workOrderCompletedAt(db, workOrder) {
     .at(-1) || "";
 }
 
+const shanghaiDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+});
+
 function shanghaiDateKey(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(date);
+  const parts = shanghaiDateFormatter.formatToParts(date);
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
 }
 
 function completionPeriodRange(period, now = new Date()) {
   const periodDays = { today: 1, "3d": 3, "7d": 7, "30d": 30 };
+  if (!Object.hasOwn(periodDays, period)) return null;
   const days = periodDays[period];
-  if (!days) return null;
   const to = shanghaiDateKey(now);
   const start = new Date(`${to}T00:00:00+08:00`);
   start.setUTCDate(start.getUTCDate() - days + 1);
   return { period, from: shanghaiDateKey(start), to };
 }
 
-function mobileCompletionData(db, period, includeItems) {
-  const range = completionPeriodRange(period);
+function mobileCompletionData(db, period, includeItems, scope) {
+  const range = scope ? scope.range : completionPeriodRange(period);
   if (!range) return null;
-  const completed = db.workOrders
+  const completed = (scope ? scope.completed : db.workOrders
     .filter((workOrder) => workOrder.status === "已完成")
-    .map((workOrder) => ({ workOrder, completedAt: workOrderCompletedAt(db, workOrder) }))
+    .map((workOrder) => ({ id: workOrder.id, completedAt: workOrderCompletedAt(db, workOrder) }))
     .filter((entry) => {
       const key = shanghaiDateKey(entry.completedAt);
       return key && key >= range.from && key <= range.to;
-    })
+    }))
     .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)));
   const result = { ...range, count: completed.length };
   if (!includeItems) return result;
-  result.items = completed.map(({ workOrder, completedAt }) => {
-    const order = db.orders.find((item) => item.id === workOrder.orderId) || {};
-    const customer = db.customers.find((item) => item.id === order.customerId) || {};
-    const allOrderWorkOrdersCompleted = db.workOrders
-      .filter((item) => item.orderId === order.id)
-      .every((item) => item.status === "已完成");
+  const workOrdersById = new Map(db.workOrders.map((item) => [item.id, item]));
+  const ordersById = new Map(db.orders.map((item) => [item.id, item]));
+  const customersById = new Map(db.customers.map((item) => [item.id, item]));
+  const incompleteOrders = new Set(db.workOrders.filter((item) => item.status !== "已完成").map((item) => item.orderId));
+  result.items = completed.map(({ id, completedAt }) => {
+    const workOrder = workOrdersById.get(id);
+    const order = ordersById.get(workOrder.orderId) || {};
+    const customer = customersById.get(order.customerId) || {};
     return {
       id: workOrder.id,
       workNo: workOrder.workNo,
@@ -1799,26 +2109,59 @@ function mobileCompletionData(db, period, includeItems) {
       status: orderFulfillmentStatus(workOrder, order),
       shippedAt: order.shippedAt || "",
       invoicedAt: order.invoicedAt || "",
-      canUpdateFulfillment: Boolean(order.id && allOrderWorkOrdersCompleted),
+      canUpdateFulfillment: Boolean(order.id && !incompleteOrders.has(order.id)),
     };
   });
   return result;
 }
 
 function enrich(db) {
-  const byId = (list, itemId) => list.find((item) => item.id === itemId);
-  const routes = db.routes.map((route) => enrichRoute(db, route));
+  const ordersById = new Map();
+  const customersById = new Map();
+  const qualityIndexes = buildQualityIndexes(db);
+  const routesByWorkOrder = new Map();
+  const drawingsByWorkOrder = new Map();
+  const drawingsByOrder = new Map();
+  const workOrdersWithExceptions = new Set();
+  for (const order of db.orders) if (!ordersById.has(order.id)) ordersById.set(order.id, order);
+  for (const customer of db.customers) if (!customersById.has(customer.id)) customersById.set(customer.id, customer);
+  for (let index = 0; index < db.drawings.length; index += 1) {
+    const drawing = db.drawings[index];
+    if (drawing.removedAt) continue;
+    if (!drawingsByWorkOrder.has(drawing.workOrderId)) drawingsByWorkOrder.set(drawing.workOrderId, []);
+    if (!drawingsByOrder.has(drawing.orderId)) drawingsByOrder.set(drawing.orderId, []);
+    drawingsByWorkOrder.get(drawing.workOrderId).push(index);
+    drawingsByOrder.get(drawing.orderId).push(index);
+  }
+  for (const exception of db.exceptions) if (exception.status !== '已解决') workOrdersWithExceptions.add(exception.workOrderId);
+  const routes = db.routes.map((route) => enrichRoute(db, route, qualityIndexes));
+  for (const route of routes) {
+    if (!routesByWorkOrder.has(route.workOrderId)) routesByWorkOrder.set(route.workOrderId, []);
+    routesByWorkOrder.get(route.workOrderId).push(route);
+  }
   const workOrders = db.workOrders.map((wo) => {
-    const order = byId(db.orders, wo.orderId);
-    const customer = order ? byId(db.customers, order.customerId) : null;
-    const workOrderRoutes = routes.filter((r) => r.workOrderId === wo.id).sort((a, b) => a.sequence - b.sequence);
-    const drawings = db.drawings.filter((item) => !item.removedAt && (item.workOrderId === wo.id || item.orderId === wo.orderId));
+    const order = ordersById.get(wo.orderId);
+    const customer = order ? customersById.get(order.customerId) : null;
+    const workOrderRoutes = (routesByWorkOrder.get(wo.id) || []).slice().sort((a, b) => a.sequence - b.sequence);
+    const workDrawingIndexes = drawingsByWorkOrder.get(wo.id) || [];
+    const orderDrawingIndexes = drawingsByOrder.get(wo.orderId) || [];
+    const drawings = [];
+    let workIndex = 0;
+    let orderIndex = 0;
+    while (workIndex < workDrawingIndexes.length || orderIndex < orderDrawingIndexes.length) {
+      const workPosition = workDrawingIndexes[workIndex] ?? Infinity;
+      const orderPosition = orderDrawingIndexes[orderIndex] ?? Infinity;
+      const position = Math.min(workPosition, orderPosition);
+      drawings.push(db.drawings[position]);
+      if (workPosition === position) workIndex += 1;
+      if (orderPosition === position) orderIndex += 1;
+    }
     const done = workOrderRoutes.reduce((sum, r) => sum + Number(r.completedQty || 0), 0);
     const total = workOrderRoutes.reduce((sum, r) => sum + Number(r.planQty || 0), 0) || wo.planQty;
     const progress = Math.min(100, Math.round((done / total) * 100));
-    const hasException = db.exceptions.some((e) => e.workOrderId === wo.id && e.status !== "已解决");
+    const hasException = workOrdersWithExceptions.has(wo.id);
     const overdue = order && order.dueDate < today(0) && wo.status !== "已完成";
-    return { ...wo, completedAt: workOrderCompletedAt(db, wo), order, customer, routes: workOrderRoutes, drawings, progress, hasException, overdue };
+    return { ...wo, completedAt: workOrderCompletedAt(db, wo, qualityIndexes.routesByWorkOrder.get(wo.id) || []), order, customer, routes: workOrderRoutes, drawings, progress, hasException, overdue };
   });
   const cutoff = today(-29);
   const completionSourceSummary = workOrders
@@ -1859,13 +2202,22 @@ function deliveryAvailability(db, order) {
   if (!completedOrderWorkOrders(db, order.id)) return { ok: false, error: "订单尚未完成生产" };
   if (!String(order.region || "").trim() || !String(order.deliveryAddress || "").trim()) return { ok: false, error: "订单缺少完整配送地址" };
   const delivery = db.deliveries.find((item) => item.orderId === order.id);
-  if (delivery && delivery.status !== "waiting") return { ok: false, error: "订单已被领取或已完成配送" };
+  if (delivery ? delivery.status !== "waiting" : Boolean(order.shippedAt)) return { ok: false, error: "订单已被领取或已完成配送" };
   return { ok: true, delivery };
 }
 
-function deliveryOrderView(db, order) {
+function waitingDelivery(order) {
+  const key = crypto.createHash("sha256").update(order.id).digest("hex");
+  return {
+    id: `delivery_${key}`, orderId: order.id, tripId: "", driverId: "", status: "waiting",
+    addressSnapshot: { region: String(order.region || ""), deliveryAddress: String(order.deliveryAddress || "") },
+    startedAt: "", deliveredAt: "", proofAttachmentIds: [], note: "", createdAt: order.createdAt || "",
+  };
+}
+
+function deliveryOrderView(db, order, showWaiting = false) {
   const customer = db.customers.find((item) => item.id === order.customerId) || {};
-  const delivery = db.deliveries.find((item) => item.orderId === order.id) || null;
+  const delivery = db.deliveries.find((item) => item.orderId === order.id) || (showWaiting ? waitingDelivery(order) : null);
   return {
     ...order,
     customerName: customer.name || order.externalCustomer || "",
@@ -2020,11 +2372,22 @@ function canReopenOrder(order) {
 function reopenIncompleteRoute(db, route) {
   const planned = Number(route.planQty);
   const completed = Number(route.completedQty || 0);
-  if (route.status !== "已完成" || route.routeType === "rework" || !Number.isFinite(planned) || planned <= 0
-    || !Number.isFinite(completed) || completed < 0 || completed >= planned) return false;
+  if (route.status !== "已完成" || route.routeType === "rework" || !Number.isFinite(planned) || planned <= 0 ||
+      !Number.isFinite(completed) || completed < 0 || completed >= planned) return false;
   route.status = canonicalRouteStatus(db, route);
   route.completedAt = "";
   return true;
+}
+
+function reopenInFlightRoutes(db) {
+  const reopenable = new Set(db.orders.filter(canReopenOrder).map((order) => order.id));
+  const active = new Set(db.workOrders.filter((order) => order.creationStatus !== "pending" &&
+    ["生产中", "异常"].includes(order.status) && reopenable.has(order.orderId)).map((order) => order.id));
+  const reopened = new Set();
+  for (const route of db.routes) {
+    if (active.has(route.workOrderId) && reopenIncompleteRoute(db, route)) reopened.add(route.workOrderId);
+  }
+  for (const id of reopened) syncWorkOrder(db, id);
 }
 
 function validateRouteStatusChange(db, route, nextStatus) {
@@ -2080,8 +2443,7 @@ function shortDayLabel(key) {
   return key || "";
 }
 
-function dashboardProcessNames(db, source = "all") {
-  const data = enrich(db);
+function dashboardProcessNames(db, source = "all", data = enrich(db)) {
   const activeWorkOrderIds = new Set(
     visibleProductionWorkOrders(data.workOrders, source).filter((workOrder) => workOrder.status !== "已完成").map((workOrder) => workOrder.id)
   );
@@ -2102,9 +2464,9 @@ function dashboardProcessNames(db, source = "all") {
   });
 }
 
-function buildProcessLoad(db, processNames = dashboardProcessNames(db), source = "all") {
+function buildProcessLoad(db, processNames = dashboardProcessNames(db), source = "all", enriched = null) {
   const todayKey = shanghaiDateKey(new Date());
-  const data = enrich(db);
+  const data = enriched || enrich(db);
   const activeWorkOrderIds = new Set(
     visibleProductionWorkOrders(data.workOrders, source).filter((workOrder) => workOrder.status !== "已完成").map((workOrder) => workOrder.id)
   );
@@ -2132,12 +2494,12 @@ function dueInfo(order) {
   return { dueAt, dueLevel: "normal", dueLabel: "正常" };
 }
 
-function routeMeta(db, route) {
-  const reports = db.reports.filter((r) => r.routeId === route.id).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+function routeMeta(db, route, groupedReports = null, dashboardDate = null) {
+  const reports = (groupedReports || db.reports.filter((r) => r.routeId === route.id)).slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const latest = reports[0];
   const reporter = latest ? resolveUser(db, latest.reporterId) : resolveUser(db, route.lastReporterId);
   const time = latest?.createdAt || route.completedAt || route.lastReportedAt || "";
-  const currentDate = new Intl.DateTimeFormat("en-CA", {
+  const currentDate = dashboardDate || new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai",
     year: "numeric",
     month: "2-digit",
@@ -2168,14 +2530,34 @@ function tvDrawingMeta(drawing) {
 
 function buildTvDashboard(db, showCustomer = false, source = "all") {
   const data = enrich(db);
-  const orders = visibleProductionWorkOrders(data.workOrders, source).map((wo) => {
-    const openQualityExceptions = db.exceptions.filter((item) => item.workOrderId === wo.id && item.status !== "已解决" && (item.qualityRouteId || item.source === "quality-inspection"));
+  const visible = visibleProductionWorkOrders(data.workOrders, source);
+  const openIssuesByWorkOrder = new Map();
+  const fieldIssuesByRoute = new Map();
+  for (const issue of db.exceptions) {
+    if (issue.status === "已解决") continue;
+    if (!openIssuesByWorkOrder.has(issue.workOrderId)) openIssuesByWorkOrder.set(issue.workOrderId, []);
+    openIssuesByWorkOrder.get(issue.workOrderId).push(issue);
+    if (issue.source === "exception-only") {
+      const previous = fieldIssuesByRoute.get(issue.routeId);
+      if (!previous || String(issue.createdAt).localeCompare(String(previous.createdAt)) > 0) fieldIssuesByRoute.set(issue.routeId, issue);
+    }
+  }
+  const reportsByRoute = new Map();
+  for (const report of db.reports) {
+    if (!reportsByRoute.has(report.routeId)) reportsByRoute.set(report.routeId, []);
+    reportsByRoute.get(report.routeId).push(report);
+  }
+  const dashboardDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+  const active = visible.filter((wo) => wo.status !== "已完成").map((wo) => {
+    const openIssues = openIssuesByWorkOrder.get(wo.id) || [];
+    const openQualityExceptions = openIssues.filter((item) => item.qualityRouteId || item.source === "quality-inspection");
     const routes = wo.routes.map((route) => {
-      const meta = routeMeta(db, route);
+      const meta = routeMeta(db, route, reportsByRoute.get(route.id) || [], dashboardDate);
       const progress = Math.min(100, Math.round((Number(route.completedQty || 0) / Number(route.planQty || 1)) * 100));
       const qualityIssueActive = openQualityExceptions.some((item) => item.qualityRouteId === route.id || item.issueRouteId === route.id);
-      const issue = db.exceptions.filter((item) => item.routeId === route.id && item.source === "exception-only" && item.status !== "已解决")
-        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+      const issue = fieldIssuesByRoute.get(route.id);
       return { ...route, ...meta, progress, qualityIssueActive, fieldExceptionActive: Boolean(issue),
         fieldExceptionTime: issue?.createdAt || "", fieldExceptionReporter: issue ? (db.users.find((item) => item.id === issue.reporterId)?.name || "历史员工") : "" };
     });
@@ -2189,17 +2571,19 @@ function buildTvDashboard(db, showCustomer = false, source = "all") {
       isRush: wo.order?.priority === "急单",
       routes,
     };
-  });
+  }).sort((a, b) => a.dueAt - b.dueAt);
   const todayText = shanghaiDateKey(new Date());
-  const finishedWorkOrdersToday = orders.filter((wo) => shanghaiDateKey(wo.completedAt) === todayText).length;
-  const active = orders
-    .filter((w) => !["已完成"].includes(w.status))
-    .sort((a, b) => a.dueAt - b.dueAt);
+  const completionCounts = new Map();
+  for (const workOrder of visible) {
+    const day = shanghaiDateKey(workOrder.completedAt);
+    if (day) completionCounts.set(day, (completionCounts.get(day) || 0) + 1);
+  }
+  const finishedWorkOrdersToday = completionCounts.get(todayText) || 0;
   const delayed = active.filter((w) => w.dueLevel === "overdue");
   const urgent = active.filter((w) => w.dueLevel === "urgent");
   const rushOrders = active.filter((w) => w.isRush);
   const onTimeRate = active.length ? Math.round(((active.length - delayed.length) / active.length) * 100) : 100;
-  const processLoad = buildProcessLoad(db, dashboardProcessNames(db, source), source);
+  const processLoad = buildProcessLoad(db, dashboardProcessNames(db, source, data), source, data);
   const waiting = processLoad.reduce((sum, process) => sum + process.remaining, 0);
   const statusDistribution = {
     active: active.length - delayed.length,
@@ -2221,7 +2605,7 @@ function buildTvDashboard(db, showCustomer = false, source = "all") {
     const d = new Date(`${todayText}T00:00:00+08:00`);
     d.setUTCDate(d.getUTCDate() - (6 - index));
     const key = shanghaiDateKey(d);
-    const value = orders.filter((wo) => shanghaiDateKey(wo.completedAt) === key).length;
+    const value = completionCounts.get(key) || 0;
     return { key, label: shortDayLabel(key), value };
   });
   return {
@@ -2234,7 +2618,7 @@ function buildTvDashboard(db, showCustomer = false, source = "all") {
       delayedWorkOrders: delayed.length,
       urgentWorkOrders: urgent.length,
       waitingRoutes: waiting,
-      totalWorkOrders: orders.length,
+      totalWorkOrders: visible.length,
       onTimeRate,
       finishedToday: finishedWorkOrdersToday,
       finishedWorkOrdersToday,
@@ -2250,9 +2634,59 @@ function buildTvDashboard(db, showCustomer = false, source = "all") {
 
 const scheduleSubscribers = new Set();
 function publishScheduleChange() {
+  const context = rowTrialContext.getStore();
+  if (context) {
+    context.scheduleChanged = true;
+    return;
+  }
   for (const response of scheduleSubscribers) {
     if (!response.destroyed && !response.write(`event: schedule\ndata: {}\n\n`)) response.end();
   }
+}
+
+function reportSubmissionKey(body, userId) {
+  if (typeof userId !== "string" || typeof body.routeId !== "string" || typeof body.submissionId !== "string" || !/^[a-zA-Z0-9-]{16,80}$/.test(body.submissionId)) return "";
+  return `rep_${crypto.createHash("sha256").update(JSON.stringify([userId, body.routeId, body.submissionId])).digest("hex")}`;
+}
+
+function sendReportResult(res, db, body, result, proxyReport) {
+  if (!proxyReport) return send(res, 200, result);
+  const context = rowTrialContext.getStore();
+  if (context?.scoped) {
+    context.proxyReportResult = result;
+    return send(res, 200, { ok: true });
+  }
+  return send(res, 200, { ...result, dashboard: buildTvDashboard(db, true, dashboardSource(body.source)) });
+}
+
+function dashboardSource(source) {
+  return ["factory", "platform"].includes(source) ? source : "all";
+}
+
+function tvCacheKey(source, viewer) {
+  const audience = !viewer ? "anonymous" : canViewRestrictedBoard(viewer) ? "restricted" : "authenticated";
+  return `${source}:${audience}`;
+}
+
+function cachedTvDashboard(key) {
+  const entry = tvDashboardCache.get(key);
+  return entry?.expiresAt > Date.now() ? entry.value : null;
+}
+
+function sendTvDashboard(res, dashboard, params, cacheHit) {
+  const total = dashboard.activeOrders.length;
+  const requestedLimit = Number(params.get("limit"));
+  const offset = Math.max(0, Number(params.get("offset")) || 0);
+  const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(24, requestedLimit) : total;
+  return send(res, 200, {
+    ...dashboard, activeOrderTotal: total, activeOrders: dashboard.activeOrders.slice(offset, offset + limit),
+  }, { "X-TV-Cache": cacheHit ? "HIT" : "MISS" });
+}
+
+function invalidateCommittedRowReads(context) {
+  if (!context?.saved) return;
+  databaseRevision += 1;
+  tvDashboardCache.clear();
 }
 
 async function handleApi(req, res) {
@@ -2264,7 +2698,7 @@ async function handleApi(req, res) {
     const durationMs = Date.now() - requestStartedAt;
     if (durationMs >= 1000 && url.pathname !== "/api/schedule-events") console.warn(JSON.stringify({ requestId, path: url.pathname, status: res.statusCode, durationMs }));
   });
-  const requestRevision = databaseRevision;
+  const requestRevision = rowTrialContext.getStore()?.readRevision ?? databaseRevision;
   let db;
   let dbReadMs = 0;
   try {
@@ -2299,27 +2733,9 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/external/work-orders") {
-      if (!BOBO_INTEGRATION_SECRET) return send(res, 503, { error: "外部工单集成未启用" });
-      const rawBody = await readRawBody(req);
-      if (!validExternalSignature(req, rawBody)) return send(res, 401, { error: "外部集成签名无效" });
-      let input;
-      try { input = JSON.parse(rawBody); } catch { return send(res, 400, { error: "请求格式错误" }); }
-      input = {
-        externalOrderNumber: String(input.externalOrderNumber || "").trim(),
-        sourceChannel: String(input.sourceChannel || "").trim(),
-        customer: String(input.customer || "").trim(),
-        phone: String(input.phone || "").trim(),
-        quantity: Number(input.quantity),
-        expectedDate: normalizeDate(input.expectedDate),
-        description: String(input.description || "").trim(),
-        material: String(input.material || "").trim(),
-        dimensions: String(input.dimensions || "").trim(),
-        region: String(input.region || "").trim(),
-        deliveryAddress: String(input.deliveryAddress || "").trim(),
-      };
-      if (!input.externalOrderNumber || input.externalOrderNumber.length > 128 || !input.customer || !input.phone || !Number.isInteger(input.quantity) || input.quantity < 1 || !input.expectedDate) return send(res, 422, { error: "外部订单核心参数不合法或不完整" });
-      if (!PLATFORM_SOURCE_CHANNELS.has(input.sourceChannel)) return send(res, 422, { error: "平台渠道无效" });
-      const nonce = String(req.headers["x-integration-nonce"]);
+      const incoming = rowTrialContext.getStore()?.inbound || await readExternalOrder(req);
+      if (incoming.error) return send(res, incoming.status, { error: incoming.error });
+      const { input, nonce } = incoming;
       const result = await serializeExternalOrder(async () => {
         const currentDb = await readDb();
         const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -2387,22 +2803,12 @@ async function handleApi(req, res) {
 
     if (req.method === "GET" && url.pathname === "/api/tv-dashboard") {
       const viewer = tvViewerFromToken(db, url.searchParams.get("viewerToken"));
-      const source = ["factory", "platform"].includes(url.searchParams.get("source")) ? url.searchParams.get("source") : "all";
-      const audience = !viewer ? "anonymous" : canViewRestrictedBoard(viewer) ? "restricted" : "authenticated";
-      const cacheKey = `${source}:${audience}`;
-      const cached = tvDashboardCache.get(cacheKey);
-      const cacheHit = Boolean(cached && cached.expiresAt > Date.now());
-      const dashboard = cacheHit ? cached.value : buildTvDashboard(db, canViewRestrictedBoard(viewer), source);
-      if (!cacheHit && requestRevision === databaseRevision) tvDashboardCache.set(cacheKey, { value: dashboard, expiresAt: Date.now() + TV_DASHBOARD_CACHE_TTL_MS });
-      const total = dashboard.activeOrders.length;
-      const requestedLimit = Number(url.searchParams.get("limit"));
-      const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
-      const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(24, requestedLimit) : total;
-      return send(res, 200, {
-        ...dashboard,
-        activeOrderTotal: total,
-        activeOrders: dashboard.activeOrders.slice(offset, offset + limit),
-      }, { "X-TV-Cache": cacheHit ? "HIT" : "MISS" });
+      const source = dashboardSource(url.searchParams.get("source"));
+      const cacheKey = tvCacheKey(source, viewer);
+      const cached = cachedTvDashboard(cacheKey);
+      const dashboard = cached || buildTvDashboard(db, canViewRestrictedBoard(viewer), source);
+      if (!cached && requestRevision === databaseRevision) tvDashboardCache.set(cacheKey, { value: dashboard, expiresAt: Date.now() + TV_DASHBOARD_CACHE_TTL_MS });
+      return sendTvDashboard(res, dashboard, url.searchParams, Boolean(cached));
     }
 
     const tvOrderDrawingsMatch = url.pathname.match(/^\/api\/tv-orders\/([^/]+)\/drawings$/);
@@ -2459,8 +2865,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/dispatch-board/route-toggle") {
-      const authorization = String(req.headers.authorization || "");
-      const viewer = viewerFromToken(db, authorization.startsWith("Bearer ") ? authorization.slice(7) : "");
+      const viewer = viewerFromToken(db, dispatchViewerToken(req));
       if (!viewer) return send(res, 401, { error: "派工看板身份已失效，请重新打开" });
       if (viewer.audience !== "dispatch-board" || !canViewRestrictedBoard(viewer.user)) {
         return send(res, 403, { error: "无权操作派工看板" });
@@ -2540,7 +2945,13 @@ async function handleApi(req, res) {
       });
       await writeDb(db);
       publishScheduleChange();
-      return send(res, 200, { ok: true, order, dashboard: buildTvDashboard(db, true, ["factory", "platform"].includes(body.source) ? body.source : "all") });
+      const result = { ok: true, order, dashboard: buildTvDashboard(db, true, dashboardSource(body.source)) };
+      const context = rowTrialContext.getStore();
+      if (context) {
+        context.dispatchDueDateResult = result;
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 200, result);
     }
 
     const qrRouteMatch = url.pathname.match(/^\/api\/qr\/route\/([^/]+)\.svg$/);
@@ -2625,6 +3036,22 @@ async function handleApi(req, res) {
       user = viewer.user;
     } else user = currentUser(req, db);
     if (!user) return send(res, 401, { error: "请先登录" });
+    if (req.method === "GET" && url.pathname === "/api/report-context") {
+      const route = db.routes.find((item) => item.id === url.searchParams.get("routeId"));
+      if (!route) return send(res, 404, { error: "工序不存在" });
+      const permission = canReportProcess(user, route);
+      if (!permission.ok) return send(res, 403, { error: permission.error });
+      const workOrder = db.workOrders.find((item) => item.id === route.workOrderId);
+      if (!workOrder) return send(res, 404, { error: "工单不存在" });
+      const order = db.orders.find((item) => item.id === workOrder.orderId);
+      const routes = db.routes.filter((item) => item.workOrderId === workOrder.id && item.processName !== "质检" && item.routeType !== "rework")
+        .map(({ id, processName, sequence, workOrderId }) => ({ id, processName, sequence, workOrderId }));
+      return send(res, 200, {
+        route: enrichRoute(db, route),
+        workOrder: { workNo: workOrder.workNo, productName: workOrder.productName, order: { quantityUnit: order?.quantityUnit } },
+        routes,
+      });
+    }
     if (req.method === "GET" && url.pathname === "/api/dispatch-board/report-context") {
       const route = db.routes.find((item) => item.id === url.searchParams.get("routeId"));
       if (!route) return send(res, 404, { error: "工序不存在" });
@@ -2643,7 +3070,7 @@ async function handleApi(req, res) {
         .filter((order) => deliveryAvailability(db, order).ok)
         .filter((order) => !region || `${order.region || ""} ${order.deliveryAddress || ""}`.toLowerCase().includes(region))
         .sort((a, b) => `${a.region || ""}${a.deliveryAddress || ""}${a.orderNo || ""}`.localeCompare(`${b.region || ""}${b.deliveryAddress || ""}${b.orderNo || ""}`, "zh-CN"))
-        .map((order) => deliveryOrderView(db, order));
+        .map((order) => deliveryOrderView(db, order, Boolean(rowTrialContext.getStore()?.scoped)));
       return send(res, 200, { orders });
     }
 
@@ -2676,7 +3103,9 @@ async function handleApi(req, res) {
         const trip = { id: id("trip"), driverId: user.id, status: "delivering", orderIds, startedAt, completedAt: "", createdAt: startedAt };
         const deliveries = orders.map((order) => {
           const existing = currentDb.deliveries.find((item) => item.orderId === order.id);
-          const delivery = existing || { id: id("delivery"), orderId: order.id, proofAttachmentIds: [], note: "", createdAt: startedAt };
+          const delivery = existing || (rowTrialContext.getStore()?.scoped
+            ? waitingDelivery(order)
+            : { id: id("delivery"), orderId: order.id, proofAttachmentIds: [], note: "", createdAt: startedAt });
           Object.assign(delivery, {
             tripId: trip.id,
             driverId: user.id,
@@ -2841,16 +3270,30 @@ async function handleApi(req, res) {
     }
     if (req.method === "GET" && url.pathname === "/api/bootstrap") {
       const data = enrich(db);
+      if (url.searchParams.get("scope") === "dashboard") {
+        const { workOrders, routes, processes, drawings, exceptions } = data;
+        return send(res, 200, {
+          scope: "dashboard", workOrders, routes, processes, drawings,
+          exceptions: exceptions.filter((item) => item.status !== "已解决"),
+          permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds),
+        });
+      }
       delete data.auditLogs;
       if (!canViewRestrictedBoard(user)) delete data.customerFeedbacks;
       data.customers = db.customers.filter((customer) => customer.active !== false);
-      return send(res, 200, { ...data, roles, permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds) });
+      const payload = { ...data, roles, permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds) };
+      const context = rowTrialContext.getStore();
+      if (context?.deferBootstrap) {
+        context.bootstrapResult = payload;
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 200, payload);
     }
 
     if (req.method === "GET" && url.pathname === "/api/mobile/completions") {
       const period = String(url.searchParams.get("period") || "today");
       const includeItems = url.searchParams.get("includeItems") === "1";
-      const result = mobileCompletionData(db, period, includeItems);
+      const result = mobileCompletionData(db, period, includeItems, rowTrialContext.getStore()?.completionScope);
       if (!result) return send(res, 400, { error: "完工统计时间范围不正确" });
       if (includeItems && !canViewRestrictedBoard(user)) return send(res, 403, { error: "无权查看完工详情" });
       if (includeItems) result.canManageOrderFulfillment = userPermissions(user, db.users, db.orderFinancialAccessUserIds).manageOrderFulfillment;
@@ -2876,6 +3319,56 @@ async function handleApi(req, res) {
         detail: (item) => JSON.stringify(item.detail || {}),
       };
       if (!auditSorters[sortBy]) return send(res, 400, { error: "操作日志排序字段不正确" });
+      if (DB_DRIVER === "mysql" || DB_DRIVER === "mysql_rows") {
+        const pool = rowTrialContext.getStore()?.readOnlyConnection || createMysqlPool();
+        const conditions = [];
+        const params = [];
+        const escapeLike = (value) => value.replace(/[!%_]/g, "!$&");
+        if (startDate) { conditions.push("created_at >= CONCAT(?, ' 00:00:00')"); params.push(startDate); }
+        if (endDate) { conditions.push("created_at < DATE_ADD(CONCAT(?, ' 00:00:00'), INTERVAL 1 DAY)"); params.push(endDate); }
+        if (actorId) { conditions.push("actor_id = ?"); params.push(actorId); }
+        if (action) { conditions.push("LOWER(action) COLLATE utf8mb4_bin LIKE ? ESCAPE '!'"); params.push(`%${escapeLike(action)}%`); }
+        if (keyword) {
+          conditions.push("LOWER(CAST(payload AS CHAR CHARACTER SET utf8mb4)) COLLATE utf8mb4_bin LIKE ? ESCAPE '!'");
+          params.push(`%${escapeLike(keyword)}%`);
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const [[countRows], [rows]] = await Promise.all([
+          pool.execute(`SELECT COUNT(*) AS total FROM bobo_audit_logs_v2 ${where}`, params),
+          (async () => {
+            let orderBy = sortBy === "target" ? "CONCAT(target_type, '/', target_id)"
+              : sortBy === "detail" ? "CAST(detail AS CHAR)"
+                : sortBy === "action" ? "action" : "created_at";
+            const orderParams = [];
+            if (sortBy === "actorName") {
+              const actors = new Map();
+              for (const actor of [...db.users, ...db.deletedUsers]) if (!actors.has(actor.id)) actors.set(actor.id, actor.name || "未知用户");
+              const names = [...new Set([...actors.values(), "未知用户"])].sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
+              const ranks = new Map(names.map((name, index) => [name, index]));
+              const cases = [...actors].map(([id, name]) => {
+                orderParams.push(id, ranks.get(name));
+                return "WHEN ? THEN ?";
+              }).join(" ");
+              orderParams.push(ranks.get("未知用户"));
+              orderBy = `CASE actor_id ${cases} ELSE ? END`;
+            }
+            const direction = sortDir === "asc" ? "ASC" : "DESC";
+            const sql = `SELECT actor_id, payload FROM bobo_audit_logs_v2 ${where} ORDER BY ${orderBy} ${direction}, id ${direction} LIMIT ? OFFSET ?`;
+            const result = await pool.execute(sql, [...params, ...orderParams, String(pageSize), String((page - 1) * pageSize)]);
+            return result;
+          })(),
+        ]);
+        const items = rows.map((item) => {
+          const actor = resolveUser(db, item.actor_id);
+          const original = typeof item.payload === "string" ? JSON.parse(item.payload) : item.payload;
+          return {
+            ...original,
+            actorName: actor?.name || "未知用户",
+            actorPhone: actor?.phone || "",
+          };
+        });
+        return send(res, 200, { page, pageSize, total: Number(countRows[0].total), items });
+      }
       const items = (db.auditLogs || [])
         .filter((item) => !startDate || String(item.createdAt || "").slice(0, 10) >= startDate)
         .filter((item) => !endDate || String(item.createdAt || "").slice(0, 10) <= endDate)
@@ -3059,36 +3552,12 @@ async function handleApi(req, res) {
       const overdue = workOrders.filter((w) => w.overdue).length;
       const active = workOrders.filter((w) => w.status !== "已完成").length;
       const finished = workOrders.filter((w) => w.status === "已完成").length;
-      const processLoad = buildProcessLoad(db, dashboardProcessNames(db, source), source);
+      const processLoad = buildProcessLoad(db, dashboardProcessNames(db, source, data), source, data);
       return send(res, 200, { active, finished, overdue, openExceptions, processLoad, workOrders, permissions: userPermissions(user, db.users, db.orderFinancialAccessUserIds) });
     }
 
     if (req.method === "GET" && url.pathname === "/api/my-tasks") {
-      const workOrdersById = new Map(db.workOrders.map((workOrder) => [workOrder.id, workOrder]));
-      const ordersById = new Map(db.orders.map((order) => [order.id, order]));
-      const workOrderIdsWithDrawings = new Set();
-      const orderIdsWithDrawings = new Set();
-      db.drawings.forEach((drawing) => {
-        if (drawing.removedAt) return;
-        if (drawing.workOrderId) workOrderIdsWithDrawings.add(drawing.workOrderId);
-        if (drawing.orderId) orderIdsWithDrawings.add(drawing.orderId);
-      });
-      const tasks = db.routes
-        .filter((route) => route.status !== "已完成" && canOperateRoute(user, route).ok)
-        .map((route) => {
-          const workOrder = workOrdersById.get(route.workOrderId) || {};
-          const order = ordersById.get(workOrder.orderId) || {};
-          return {
-            ...enrichRoute(db, route),
-            workOrder: {
-              workNo: workOrder.workNo || "",
-              productName: workOrder.productName || "",
-              order: { quantityUnit: order.quantityUnit },
-              hasDrawings: workOrderIdsWithDrawings.has(workOrder.id) || orderIdsWithDrawings.has(order.id),
-            },
-          };
-        });
-      return send(res, 200, { tasks });
+      return send(res, 200, { tasks: buildMyTasks(db, user) });
     }
 
     const routeDrawingsMatch = req.method === "GET" && url.pathname.match(/^\/api\/routes\/([^/]+)\/drawings$/);
@@ -3436,7 +3905,7 @@ async function handleApi(req, res) {
         route.planQty = quantity;
         if (increased && canReopenOrder(order) && reopenIncompleteRoute(db, route)) reopenedWorkOrders.add(route.workOrderId);
       });
-      for (const workOrderId of reopenedWorkOrders) syncWorkOrder(db, workOrderId);
+      for (const id of reopenedWorkOrders) syncWorkOrder(db, id);
 
       const addedDrawings = [];
       [...new Set(Array.isArray(body.addDrawingIds) ? body.addDrawingIds : [])].forEach((drawingId) => {
@@ -3462,7 +3931,11 @@ async function handleApi(req, res) {
         removedDrawings,
       });
       await writeDb(db);
-      if (reopenedWorkOrders.size) publishScheduleChange();
+      if (reopenedWorkOrders.size) {
+        const context = rowTrialContext.getStore();
+        if (context) context.scheduleChanged = true;
+        else publishScheduleChange();
+      }
       return send(res, 200, { ok: true, order, workOrders: linkedWorkOrders });
     }
 
@@ -3749,12 +4222,21 @@ async function handleApi(req, res) {
       if (!permission.ok) return send(res, 403, { error: permission.error });
       const submissionId = String(body.submissionId || "");
       const submissionHash = crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex");
+      const reportId = proxyReport ? "" : reportSubmissionKey(body, user.id);
+      if (!proxyReport && body.submissionId !== undefined) {
+        if (!reportId) return send(res, 400, { error: "报工提交标识无效" });
+        const previous = db.reports.find((item) => item.id === reportId);
+        if (previous) {
+          if (previous.submissionHash !== submissionHash) return send(res, 409, { error: "该提交已处理，请重新发起报工" });
+          return send(res, 200, { ok: true, route: previous.submissionRouteResult, report: previous });
+        }
+      }
       if (proxyReport) {
         if (!/^[a-zA-Z0-9-]{16,80}$/.test(submissionId)) return send(res, 400, { error: "报工提交标识无效" });
         const previous = db.reports.find((item) => item.dispatchSubmissionId === submissionId && item.reporterId === user.id);
         if (previous) {
           if (previous.dispatchSubmissionHash !== submissionHash || previous.routeId !== route.id) return send(res, 409, { error: "该提交已处理，请关闭后重新打开报工窗口" });
-          return send(res, 200, { ok: true, route, report: previous, dashboard: buildTvDashboard(db, true, ["factory", "platform"].includes(body.source) ? body.source : "all") });
+          return sendReportResult(res, db, body, { ok: true, route, report: previous }, proxyReport);
         }
         if (route.status !== "进行中" || Number(body.expectedCompletedQty) !== Number(route.completedQty || 0)) return send(res, 409, { error: "工序状态或剩余数量已变化，请关闭后重新打开" });
         if (route.processName === "质检" && Number(body.expectedInspectionAvailableQty) !== qualityRouteMeta(db, route).inspectionAvailableQty) return send(res, 409, { error: "可送检数量已变化，请重新打开" });
@@ -3829,7 +4311,7 @@ async function handleApi(req, res) {
       if (route.status === "已完成") route.completedAt = route.lastReportedAt;
       const schedule = reportSchedule(route, route.lastReportedAt);
       const report = {
-        id: id("rep"),
+        id: reportId || id("rep"),
         routeId: route.id,
         workOrderId: route.workOrderId,
         reporterId: user.id,
@@ -3936,10 +4418,17 @@ async function handleApi(req, res) {
         report.source = "dispatch-board";
         appendAudit(db, user, "dispatch-report-create", "report", report.id, { routeId: route.id, submissionId, managerId: user.id });
       }
+      if (reportId) {
+        report.submissionHash = submissionHash;
+        report.submissionRouteResult = { ...route };
+      }
       await writeDb(db);
-      publishScheduleChange();
-      setTimeout(() => void processPlatformWebhooks(), 50);
-      return send(res, 200, { ok: true, route, report, ...(proxyReport ? { dashboard: buildTvDashboard(db, true, ["factory", "platform"].includes(body.source) ? body.source : "all") } : {}) });
+      const scoped = rowTrialContext.getStore()?.scoped;
+      if (!scoped) {
+        publishScheduleChange();
+        setTimeout(() => void processPlatformWebhooks(), 50);
+      }
+      return sendReportResult(res, db, body, { ok: true, route, report }, proxyReport);
     }
 
     if (req.method === "POST" && url.pathname === "/api/exceptions/resolve") {
@@ -4111,6 +4600,129 @@ async function dispatchApi(req, res) {
     // Receive the body before taking a write-queue slot.
     if (["POST", "PUT", "PATCH"].includes(req.method)) await readRawBody(req);
     if (req.aborted || res.destroyed) return;
+    if (DB_DRIVER === "mysql_rows") {
+      const { readScopedRows, scopedReads, withScopedRows, scopedWrites } = require("./lib/scoped-row-transaction");
+      const weappQrRouteMatch = req.method === "GET" && pathname.match(WEAPP_QR_ROUTE);
+      if (weappQrRouteMatch) {
+        const state = await readScopedRows(createMysqlPool(), {
+          pathname: "/api/qr/route/weapp.png", routeId: decodeURIComponent(weappQrRouteMatch[1])
+        }, (selected) => selected);
+        return await rowTrialContext.run({ state, scoped: true, readOnly: true }, () => handleApi(req, res));
+      }
+      const proxyReport = pathname === "/api/dispatch-board/report";
+      const dispatchViewer = proxyReport || pathname === "/api/dispatch-board/report-context" || pathname === "/api/dispatch-board/report-upload";
+      const claims = dispatchViewer ? verifiedViewerClaims(dispatchViewerToken(req)) : null;
+      const userId = dispatchViewer ? (claims?.audience === "dispatch-board" ? claims.userId : "") : req.headers["x-user-id"];
+      const { searchParams } = new URL(req.url, "http://localhost");
+      const bootstrapDashboard = pathname === "/api/bootstrap" && searchParams.get("scope") === "dashboard";
+      if (req.method === "GET" && (scopedReads.has(pathname) || bootstrapDashboard)) {
+        const readRevision = databaseRevision;
+        const routeId = searchParams.get("routeId");
+        const viewerUserId = pathname === "/api/tv-dashboard" ? verifiedViewerClaims(searchParams.get("viewerToken"))?.userId : userId;
+        if (pathname === "/api/tv-dashboard" && tvDashboardCache.size) {
+          const source = dashboardSource(searchParams.get("source"));
+          const token = searchParams.get("viewerToken");
+          const viewer = viewerUserId ? await readScopedRows(createMysqlPool(),
+            { pathname: "/api/tv-viewer-token", userId: viewerUserId }, (state) => tvViewerFromToken(state, token)) : null;
+          const cached = cachedTvDashboard(tvCacheKey(source, viewer));
+          if (cached) return sendTvDashboard(res, cached, searchParams, true);
+        }
+        const completions = pathname === "/api/mobile/completions" ? {
+          range: completionPeriodRange(searchParams.get("period") || "today"),
+          dateKey: shanghaiDateKey, includeItems: searchParams.get("includeItems") === "1"
+        } : undefined;
+        const history = pathname.startsWith("/api/history/") ? {
+          filters: historyFilters({ searchParams }), dateInRange: isDateInRange,
+          canRead: (user) => canManage(user) || userHasRole(user, "quality"), canViewFeedback: canViewRestrictedBoard,
+          matchWorkOrders: (state, filters) => workOrderHistoryItems(state, filters, false, false)
+        } : undefined;
+        const deliveryAccess = pathname.startsWith("/api/deliveries/") ? { canDrive, canSupervise, platformChannels: PLATFORM_SOURCE_CHANNELS } : undefined;
+        const options = { pathname, userId: viewerUserId, routeId, completions, history, deliveryAccess, bootstrapDashboard };
+        if (pathname === "/api/reports/management-export") {
+          const { validateReportDateRange } = require("./lib/management-report-export");
+          try {
+            options.reportRange = { ...validateReportDateRange(searchParams.get("from"), searchParams.get("to")), canRead: canManage };
+          } catch {
+            // The normal handler returns its permission or validation response.
+          }
+          const state = await readScopedRows(createMysqlPool(), options, (selected) => selected);
+          return await rowTrialContext.run({ state, scoped: true, readOnly: true }, () => handleApi(req, res));
+        }
+        return await readScopedRows(createMysqlPool(), options, (state, readOnlyConnection, completed) => {
+          if (options.bootstrapDashboard || pathname === "/api/dashboard" || pathname === "/api/tv-dashboard") reopenInFlightRoutes(state);
+          return rowTrialContext.run({ state, scoped: true, readRevision, readOnlyConnection, completionScope: completions && { range: completions.range, completed } }, () => handleApi(req, res));
+        });
+      }
+      if (req.method === "POST" && Object.hasOwn(scopedWrites, pathname)) {
+        const inbound = pathname === "/api/external/work-orders" ? await readExternalOrder(req) : null;
+        if (inbound?.error) return send(res, inbound.status, { error: inbound.error });
+        const body = req.method === "POST" && !inbound ? await parseBody(req) : {};
+        const { runBufferedRowMutation } = require("./lib/row-http-mutation");
+        let context;
+        await runBufferedRowMutation(createMysqlPool(), res, (state, buffered, rollbackFiles) => {
+          context = { state, scoped: true, saved: false, inbound, rollbackFiles };
+          return rowTrialContext.run(context, () => handleApi(req, buffered));
+        }, () => Boolean(context?.saved), {
+          transact: (pool, action, shouldApply) => withScopedRows(pool, action, shouldApply, {
+            pathname, userId, body, inbound, reportId: proxyReport ? "" : reportSubmissionKey(body, userId), platformChannels: PLATFORM_SOURCE_CHANNELS
+          }),
+          deferSuccess: proxyReport,
+          afterCommit: () => invalidateCommittedRowReads(context),
+          commitOnError: (status) => Boolean(inbound && status === 409 && context?.saved)
+        });
+        if ((pathname === "/api/report" || proxyReport) && context?.saved && res.statusCode < 400) publishScheduleChange();
+        if (context?.proxyReportResult && !res.destroyed && !res.writableEnded) {
+          const dashboard = await readScopedRows(createMysqlPool(), { pathname: "/api/tv-dashboard", userId, reportDashboard: true }, (state) => {
+            const viewer = viewerFromToken(state, dispatchViewerToken(req));
+            if (!viewer || !canManage(viewer.user) || !canViewRestrictedBoard(viewer.user)) return null;
+            res.viewOrderFinancials = financialAccessUserIds(state.users, state.orderFinancialAccessUserIds).has(String(viewer.user.id));
+            return buildTvDashboard(state, true, dashboardSource(body.source));
+          });
+          if (!dashboard) return send(res, 403, { error: "派工看板权限已变化，请重新打开" });
+          if (res.destroyed || res.writableEnded) return;
+          return send(res, 200, { ...context.proxyReportResult, dashboard });
+        }
+        return;
+      }
+      if (req.method === "GET" && pathname === "/api/my-tasks" && process.env.BOBO_SYNTHETIC_TASK_DIRECT === "1") {
+        const { withConsistentRowRead } = require("./lib/row-state-reader");
+        const { readEmployeeTaskSnapshot } = require("./lib/task-snapshot-read");
+        const selected = await withConsistentRowRead(createMysqlPool(), (connection) =>
+          readEmployeeTaskSnapshot(connection, req.headers["x-user-id"], canOperateRoute)
+        );
+        if (!selected) return send(res, 401, { error: "请先登录" });
+        return send(res, 200, { tasks: buildMyTasks(selected, selected.user) });
+      }
+      const trialReads = new Set(["/api/bootstrap", "/api/my-tasks", "/api/customer-feedbacks", "/api/qr/resolve"]);
+      const trialWrites = new Set(["/api/login", "/api/logout", "/api/customers", "/api/customers/delete", "/api/users", "/api/users/update-role", "/api/users/delete", "/api/processes", "/api/processes/update-status", "/api/orders", "/api/orders/update", "/api/orders/repeat", "/api/routes", "/api/routes/delete", "/api/routes/publish-schedule", "/api/work-orders/delete", "/api/assign", "/api/route-status", "/api/route-exceptions", "/api/exceptions", "/api/exceptions/resolve", "/api/customer-feedbacks", "/api/customer-feedbacks/resolve", "/api/settings/tv"]);
+      const dispatchWrite = req.method === "POST" && ["/api/dispatch-board/route-toggle", "/api/dispatch-board/route-schedule", "/api/dispatch-board/order-due-date"].includes(pathname);
+      if (!dispatchWrite && !((req.method === "GET" && trialReads.has(pathname)) || (req.method === "POST" && trialWrites.has(pathname)))) return send(res, 503, { error: "当前接口尚未完成合成试验", requestId });
+      const { runBufferedRowMutation } = require("./lib/row-http-mutation");
+      let context;
+      const deferBootstrap = req.method === "GET" && pathname === "/api/bootstrap";
+      await runBufferedRowMutation(createMysqlPool(), res, async (state, buffered, connection) => {
+        if (req.aborted || res.destroyed) throw new Error("行存储试验请求已断开");
+        context = { state, saved: false, deferBootstrap };
+        await rowTrialContext.run(context, () => handleApi(req, buffered));
+        if (req.method === "GET" && pathname === "/api/my-tasks" && process.env.BOBO_SYNTHETIC_TASK_SHADOW === "1" && !context.saved) {
+          const user = currentUser(req, state);
+          if (user) {
+            const { readTaskSnapshot } = require("./lib/task-snapshot-read");
+            const selected = await readTaskSnapshot(connection);
+            const shadowUser = currentUser(req, selected);
+            if (!shadowUser || JSON.stringify(buildMyTasks(state, user)) !== JSON.stringify(buildMyTasks(selected, shadowUser))) throw new Error("任务读取影子校验不一致");
+          }
+        }
+      }, () => Boolean(context?.saved), {
+        auditBuffer: true, deferSuccess: deferBootstrap || (dispatchWrite && pathname === "/api/dispatch-board/order-due-date"), afterCommit: () => {
+          invalidateCommittedRowReads(context);
+          if (context?.saved && context.scheduleChanged) publishScheduleChange();
+        }
+      });
+      if (context?.bootstrapResult && !res.destroyed && !res.writableEnded) return send(res, 200, context.bootstrapResult);
+      if (context?.dispatchDueDateResult && !res.destroyed && !res.writableEnded) return send(res, 200, context.dispatchDueDateResult);
+      return;
+    }
     const queue = req.method === "POST" && pathname === "/api/orders/update" ? (run) => serializeOrderNumberWrite(() => serializeDispatchBoardWrite(run))
       : req.method === "POST" && ORDER_NUMBER_WRITE_PATHS.has(pathname) ? serializeOrderNumberWrite
       : req.method === "POST" && DISPATCH_BOARD_WRITE_PATHS.has(pathname) ? serializeDispatchBoardWrite : null;
@@ -4154,21 +4766,41 @@ server.on("error", (error) => {
 });
 
 async function startServer() {
+  if (process.argv.includes("--migrate-audit-logs")) {
+    if (DB_DRIVER !== "mysql") throw new Error("审计日志拆表迁移仅支持 DB_DRIVER=mysql");
+    try {
+      await ensureMysqlStateTable();
+      await ensureMysqlAuditTable();
+      await moveAuditLogsOutOfState();
+    } finally {
+      if (mysqlPool) await mysqlPool.end();
+    }
+    console.log("audit logs split migration: ok");
+    return;
+  }
   await ensureDb();
   const backfillIndex = process.argv.indexOf("--backfill-platform-order");
   if (backfillIndex >= 0) {
     await backfillPlatformOrder(process.argv[backfillIndex + 1]);
     return;
   }
-  server.listen(PORT, () => {
+  const onListening = () => {
     console.log(`非标钣金工单系统已启动：http://localhost:${PORT}`);
     void processPlatformWebhooks();
-  });
+    setInterval(() => void processPlatformWebhooks(), 5000).unref();
+  };
+  if (DB_DRIVER === "mysql_rows") server.listen(PORT, "127.0.0.1", onListening);
+  else server.listen(PORT, onListening);
 }
 
-setInterval(() => void processPlatformWebhooks(), 5000).unref();
-
-startServer().catch((error) => {
+startServer().catch(async (error) => {
   console.error(error);
   process.exitCode = 1;
+  if (mysqlPool) {
+    try {
+      await mysqlPool.end();
+    } catch (closeError) {
+      console.error("关闭 MySQL 连接池失败", closeError.code || closeError.name);
+    }
+  }
 });

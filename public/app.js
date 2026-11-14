@@ -211,8 +211,12 @@ function toast(text) {
 async function refresh() {
   if (!state.user) return render();
   const revision = state.dataRevision;
-  const data = await api("/api/bootstrap");
-  if (revision !== state.dataRevision) return;
+  const view = state.view;
+  const userId = state.user.id;
+  const roles = userRoles(state.user);
+  const dashboard = view === "dashboard" && !isShopWorkerRole(state.user.role) && !(roles.length === 1 && roles[0] === "driver");
+  const data = await api(dashboard ? "/api/bootstrap?scope=dashboard" : "/api/bootstrap");
+  if (revision !== state.dataRevision || view !== state.view || userId !== state.user?.id) return;
   state.data = data;
   render();
 }
@@ -2033,7 +2037,7 @@ function render() {
     bindLogin();
     return;
   }
-  if (!state.data) {
+  if (!state.data || (state.data.scope === "dashboard" && state.view !== "dashboard")) {
     root.innerHTML = `<div class="empty">正在加载...</div>`;
     refresh().catch((err) => toast(err.message));
     return;
@@ -2157,6 +2161,10 @@ function bindEvents() {
     btn.onclick = async () => {
       if (state.view !== btn.dataset.view && !allowScheduleLeave()) return;
       state.view = btn.dataset.view;
+      if (state.data.scope === "dashboard" && state.view !== "dashboard") {
+        try { await refresh(); } catch (error) { toast(error.message); return; }
+        if (state.view !== btn.dataset.view) return;
+      }
       if (state.view === "auditLogs") await loadAuditLogs();
       render();
     };
@@ -2779,19 +2787,38 @@ function downloadCsv(fileName, csvText) {
   link.click();
 }
 
+const pendingReportRequests = new Map();
+
+async function submitReportOnce(payload, files) {
+  const key = JSON.stringify([state.user?.id, payload.routeId]);
+  const fingerprint = JSON.stringify([payload, files.map(({ name, size, lastModified }) => [name, size, lastModified])]);
+  let pending = pendingReportRequests.get(key);
+  if (pending?.sending) return false;
+  if (pending?.fingerprint !== fingerprint) {
+    const random = crypto.getRandomValues(new Uint8Array(16));
+    const submissionId = Array.from(random, (value) => value.toString(16).padStart(2, "0")).join("");
+    pending = { fingerprint, submissionId, sending: false };
+    pendingReportRequests.set(key, pending);
+  }
+  pending.sending = true;
+  try {
+    if (!pending.images) pending.images = await uploadImageFiles(files);
+    await api("/api/report", {
+      method: "POST",
+      body: JSON.stringify({ ...payload, images: pending.images, submissionId: pending.submissionId }),
+    });
+    pendingReportRequests.delete(key);
+    return true;
+  } finally {
+    pending.sending = false;
+  }
+}
+
 async function submitReport(routeId) {
   try {
     const isQuality = Boolean(el(`inspected_${routeId}`));
-    const images = [];
     const file = el(`image_${routeId}`)?.files?.[0];
-    if (file) {
-      const dataUrl = await fileToDataUrl(file);
-      const uploaded = await api("/api/upload", { method: "POST", body: JSON.stringify({ dataUrl, name: file.name }) });
-      images.push(uploaded.url);
-    }
-    await api("/api/report", {
-      method: "POST",
-      body: JSON.stringify({
+    if (!await submitReportOnce({
         routeId,
         completedQty: isQuality ? 0 : el(`done_${routeId}`).value,
         submittedQty: isQuality ? el(`submitted_${routeId}`).value : 0,
@@ -2804,9 +2831,7 @@ async function submitReport(routeId) {
         note: el(`note_${routeId}`).value,
         exceptionType: el(`exType_${routeId}`).value,
         exceptionDescription: el(`exDesc_${routeId}`).value,
-        images,
-      }),
-    });
+    }, file ? [file] : [])) return;
     toast("报工已提交");
     await refresh();
   } catch (err) {
@@ -3011,10 +3036,7 @@ async function submitQualityInspection() {
       toast("请选择返工工序");
       return;
     }
-    const images = await uploadImageFiles(el("qualityInspectionImages")?.files);
-    await api("/api/report", {
-      method: "POST",
-      body: JSON.stringify({
+    if (!await submitReportOnce({
         routeId: candidate.qualityRoute.id,
         autoStartQuality: true,
         completedQty: 0,
@@ -3026,9 +3048,7 @@ async function submitQualityInspection() {
         issueRouteId,
         reworkTargetRouteId,
         exceptionDescription: description,
-        images,
-      }),
-    });
+    }, Array.from(el("qualityInspectionImages")?.files || []))) return;
     state.qualityInspection.workOrderId = "";
     toast("质检结果已提交");
     await refresh();
